@@ -16,7 +16,6 @@ Suggests:
 Depends:
 	readr,
 	tigris,
-	tmap,
 	ipfr,
 	tidycensus,
 	tidyverse,
