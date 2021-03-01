@@ -28,7 +28,6 @@ get_pums <- function(YEAR,
   
   if(!LEVEL %in% c("p", "h")) stop("Level must be either 'p' for person or 'h' for household level data")
   
-  
 # Base url and file name  
   base_url     <- paste0("https://www2.census.gov/programs-surveys/acs/data/pums/", YEAR)
   download_zip <- paste0("csv_", LEVEL, STATE, ".zip")
@@ -47,9 +46,9 @@ get_pums <- function(YEAR,
                     KEEP_DIR, download_zip, " " ,
                     download_url)) 
       
-      unzipped <- unzip(paste0(KEEP_DIR, download_zip))
-      csv_file <- unzipped[grepl(".csv", unzipped)]
-      out <- read_csv(unz(temp, csv_file))
+      unzipped <- unzip(paste0(KEEP_DIR, download_zip), exdir = KEEP_DIR)
+      csv_file <- unzipped[grepl("psam", unzipped)]
+      out <- read_csv(csv_file)
       
     } else {
       dir.create(KEEP_DIR)
@@ -57,9 +56,9 @@ get_pums <- function(YEAR,
                     KEEP_DIR, download_zip, " " ,
                     download_url))
       
-      unzipped <- unzip(paste0(KEEP_DIR, download_zip))
-      csv_file <- unzipped[grepl(".csv", unzipped)]
-      out <- read_csv(unz(temp, csv_file))
+      unzipped <- unzip(paste0(KEEP_DIR, download_zip), exdir = KEEP_DIR)
+      csv_file <- unzipped[grepl("psam", unzipped)]
+      out <- read_csv(csv_file)
       
     }
   } else {
@@ -68,9 +67,9 @@ get_pums <- function(YEAR,
                   temp, " " ,
                   download_url))
     
-    unzipped <- unzip(temp)
-    csv_file <- str_remove(unzipped[grepl(".csv", unzipped)], "./")
-    out <- read_csv(unz(temp, csv_file))
+    unzipped <- unzip(temp, exdir = tempdir())
+    csv_file <- unzipped[grepl("psam", unzipped)]
+    out <- read_csv(csv_file)
     unlink(temp)
   }
   
