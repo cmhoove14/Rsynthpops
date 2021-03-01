@@ -1,0 +1,41 @@
+---
+title: "Generate A Population"
+author: "Chris Hoover"
+date: "3/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+devtools::load_all()
+```
+## Get data  
+```{r get_data, message = FALSE}
+p_pums <- get_pums(YEAR      = 2018, 
+                   FIVE_YEAR = TRUE, 
+                   STATE     = "DE", 
+                   LEVEL     = "p", 
+                   KEEP      = TRUE,
+                   KEEP_DIR  = "Sandbox/data/")
+
+h_pums <- get_pums(YEAR      = 2018, 
+                   FIVE_YEAR = TRUE, 
+                   STATE     = "DE", 
+                   LEVEL     = "h", 
+                   KEEP      = TRUE,
+                   KEEP_DIR  = "Sandbox/data/")
+```
+
+## Generate seeds  
+```{r gen_seeds}
+h_seed<- hca_pums %>% 
+  filter(PUMA %in% c("07501", "07502", "07503", "07504", "07505", "07506", "07507"), NP!=0, !is.na(SERIALNO), !is.na(HINCP)) %>%
+  mutate(hhsize = ifelse(NP > 6, 7, NP), 
+         hhincome = HINCP *(ADJINC/1000000), # adjust all income to 2018 dollars
+         hhincome = cut(HINCP, breaks = c(-20000, 50000, 100000, Inf), include.lowest = TRUE, right = FALSE), hhincome = as.numeric(hhincome)) %>%
+  dplyr::select(SERIALNO, hhsize, hhincome)
+
+```
+
