@@ -1,0 +1,49 @@
+#' @title Generate population
+#' 
+#' @description One-liner function to generate population
+#' 
+#' @param FIPS US FIPS code for corresponding geography. If length 2, will generate for corresponding state. If length 5, will generate for corresponding county
+#' @param CHARS Agent characteristics to include. See `details`
+#' @param OUT_DIR Directory to save generated population to. Also will house intermediate downloaded files if KEEP_ALL is TRUE
+#' @param KEEP_ALL Logical of whether to keep all intermediate files used to generate populaiton. Defaults to TRUE
+#' 
+#' @details 
+#' 
+#' @return 
+#' @export
+#' 
+gen_synth_pop <- function(FIPS, CHARS, OUT_DIR, KEEP_ALL = TRUE){
+# Process inputs  
+  STATE_FIPS <- substr(FIPS,1,2)
+  STATE_GET  <- cts_to_pumas %>% 
+    filter(STATEFP == STATE_FIPS) %>% 
+    slice(1) %>% 
+    pull(STATE)
+  
+  if(nchar(FIPS) == 2){
+    PUMS <- cts_to_pumas %>% 
+      filter(STATEFP == FIPS) %>% 
+      pull(PUMA5CE) %>% 
+      unique()
+  } else {
+    PUMS <- cts_to_pumas %>% 
+      filter(STCNTYFP == FIPS) %>% 
+      pull(PUMA5CE) %>% 
+      unique()
+  }
+    
+# Get all data to generate population   
+  p_dat <- get_pums(YEAR      = 2018, 
+                    FIVE_YEAR = TRUE, 
+                    STATE     = STATE_GET, 
+                    LEVEL     = "p", 
+                    KEEP      = KEEP_ALL,
+                    KEEP_DIR  = OUT_DIR)
+  
+  h_dat <- get_pums(YEAR      = 2018, 
+                    FIVE_YEAR = TRUE, 
+                    STATE     = STATE_GET, 
+                    LEVEL     = "h", 
+                    KEEP      = KEEP_ALL,
+                    KEEP_DIR  = OUT_DIR)
+}
