@@ -11,6 +11,7 @@ knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
 
 devtools::load_all()
 ```
+
 ## Get data  
 ```{r get_data, message = FALSE}
 p_pums <- get_pums(YEAR      = 2018, 
