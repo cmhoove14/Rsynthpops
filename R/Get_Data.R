@@ -41,31 +41,20 @@ get_pums <- function(YEAR,
 
 # Download
   if(KEEP){
-    if(dir.exists(KEEP_DIR)){
-      system(paste0("wget -O ", 
-                    KEEP_DIR, download_zip, " " ,
-                    download_url)) 
-      
-      unzipped <- unzip(paste0(KEEP_DIR, download_zip), exdir = KEEP_DIR)
-      csv_file <- unzipped[grepl("psam", unzipped)]
-      out <- read_csv(csv_file)
-      
-    } else {
+    if(!dir.exists(KEEP_DIR)){
       dir.create(KEEP_DIR)
-      system(paste0("wget -O ", 
-                    KEEP_DIR, download_zip, " " ,
-                    download_url))
+    }  
+      download.file(url = download_url,
+                    destfile = here::here(paste0(KEEP_DIR, download_zip)))
       
-      unzipped <- unzip(paste0(KEEP_DIR, download_zip), exdir = KEEP_DIR)
+      unzipped <- unzip(here::here(paste0(KEEP_DIR, download_zip)), exdir = KEEP_DIR)
       csv_file <- unzipped[grepl("psam", unzipped)]
       out <- read_csv(csv_file)
       
-    }
   } else {
     temp <- tempfile(fileext = ".zip")
-    system(paste0("wget -O ", 
-                  temp, " " ,
-                  download_url))
+    download.file(url = download_url,
+                  destfile = temp)
     
     unzipped <- unzip(temp, exdir = tempdir())
     csv_file <- unzipped[grepl("psam", unzipped)]
