@@ -33,7 +33,9 @@ occ_groups <- OCC_list %>%
 d_occ_groups <- OCC_list %>% 
   filter(Description %in% occ_groups) %>% 
   mutate(Group_Code = c(1:nrow(.))) %>% 
-  dplyr::select(d2_code, Group_Code)
+  dplyr::select(d2_code, Group_Code) %>% 
+  bind_rows(tibble(d2_code = 55, # Add military occps manually
+                   Group_Code = length(occ_groups)+1))
 
 OCC_list <- OCC_list %>% 
   left_join(d_occ_groups, by = "d2_code") %>% 
