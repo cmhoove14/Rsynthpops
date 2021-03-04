@@ -48,4 +48,12 @@ gen_synth_pop <- function(FIPS, CHARS, OUT_DIR, KEEP_ALL = TRUE){
                     KEEP      = KEEP_ALL,
                     KEEP_DIR  = OUT_DIR) %>% 
     filter(PUMA %in% PUMS)
+  
+# Generate weights from PUMS
+  p_occp <- p_dat %>% 
+    group_by(OCCP) %>%
+    summarise(num = n(), prop = num/nrow(.)) %>%
+    left_join(OCC_list, by = c("OCCP" = "Code")) %>%
+    ungroup() %>%
+    mutate(Group_Code = if_else(is.na(Group_Code), "00", str_pad(Group_Code, 2, pad = "0")))
 }
