@@ -38,12 +38,14 @@ gen_synth_pop <- function(FIPS, CHARS, OUT_DIR, KEEP_ALL = TRUE){
                     STATE     = STATE_GET, 
                     LEVEL     = "p", 
                     KEEP      = KEEP_ALL,
-                    KEEP_DIR  = OUT_DIR)
+                    KEEP_DIR  = OUT_DIR) %>% 
+    filter(PUMA %in% PUMS)
   
   h_dat <- get_pums(YEAR      = 2018, 
                     FIVE_YEAR = TRUE, 
                     STATE     = STATE_GET, 
                     LEVEL     = "h", 
                     KEEP      = KEEP_ALL,
-                    KEEP_DIR  = OUT_DIR)
+                    KEEP_DIR  = OUT_DIR) %>% 
+    filter(PUMA %in% PUMS)
 }
