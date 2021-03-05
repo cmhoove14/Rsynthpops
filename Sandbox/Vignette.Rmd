@@ -13,6 +13,16 @@ devtools::load_all()
 ```
 
 ## Get data  
+```{r get_data_tidycensus}
+pums_vars_2018 <- pums_variables %>% 
+  filter(year == 2018, survey == "acs1")
+
+pums_vars_2018 %>% 
+  distinct(var_code, var_label, data_type, level) %>% 
+  View()
+```
+
+
 ```{r get_data, message = FALSE}
 p_pums <- get_pums(YEAR      = 2018, 
                    FIVE_YEAR = TRUE, 
@@ -27,6 +37,19 @@ h_pums <- get_pums(YEAR      = 2018,
                    LEVEL     = "h", 
                    KEEP      = TRUE,
                    KEEP_DIR  = "Sandbox/data/")
+
+all_pums <- merge(p_pums, h_pums, by = "SERIALNO")
+```
+
+```{r occp_weights}
+# Generate weights from PUMS
+  p_occp <- p_pums %>% 
+    group_by(OCCP) %>%
+    summarise(num = n(), prop = num/nrow(.)) %>%
+    left_join(OCC_list, by = c("OCCP" = "Code")) %>%
+    ungroup() %>%
+    mutate(Group_Code = if_else(is.na(Group_Code), "00", str_pad(Group_Code, 2, pad = "0")))
+
 ```
 
 ## Generate seeds  
