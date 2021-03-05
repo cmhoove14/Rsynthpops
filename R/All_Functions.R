@@ -1,70 +1,45 @@
-#' @title Get PUMS
+
+
+#' @title Person seed
 #' 
-#' @description Interfaces with ACS PUMS ftp site to download pums data for specified state
+#' @description Creates person seed for input to ipf
 #' 
-#' @param YEAR survey year to download data. 
-#' @param FIVE_YEAR whether to download five year survey data or one year. defaults to five year, set to FALSE for 1 year
-#' @param STATE two-letter state abbreviation for state to grab data for
-#' @param LEVEL person or household level data download. "p" for person, "h" for household
-#' @param KEEP logical of whether to keep raw downloaded zip file, defaults to FALSE
-#' @param KEEP_DIR directory at which to store downloaded zip file
+#' @param CT character containing name of CT as it appears in ACS data
+#' @param OCCP data table/tibble that contains occupational data for target geography
+#' @param AGE_SEX data table/tibble that contains ACS data for target geography stratified by sex and age
+#' @param RACE data table/tibble that contains ACS data for target geography stratified by race/ethnicity
 #' 
 #' @details 
 #' 
-#' @return 
+#' @return list containing targets for occupation, age, sex and race for the CT
 #' @export
 #' 
-
-get_pums <- function(YEAR, 
-                     FIVE_YEAR = TRUE, 
-                     STATE, 
-                     LEVEL, 
-                     KEEP = FALSE, 
-                     KEEP_DIR){
-  
-# Prerun checks
-  STATE <- tolower(STATE)
-  LEVEL <- tolower(LEVEL)
-  
-  if(!LEVEL %in% c("p", "h")) stop("Level must be either 'p' for person or 'h' for household level data")
-  
-# Base url and file name  
-  base_url     <- paste0("https://www2.census.gov/programs-surveys/acs/data/pums/", YEAR)
-  download_zip <- paste0("csv_", LEVEL, STATE, ".zip")
-    
-# Complete url to download file  
-  if(FIVE_YEAR){
-    download_url <- paste0(base_url, "/5-Year/", download_zip)
-  } else {
-    download_url <- paste0(base_url, "/1-Year/", download_zip)
-  }
-
-# Download
-  if(KEEP){
-    if(!dir.exists(KEEP_DIR)){
-      dir.create(KEEP_DIR)
-    }  
-      download.file(url = download_url,
-                    destfile = here::here(paste0(KEEP_DIR, download_zip)))
-      
-      unzipped <- unzip(here::here(paste0(KEEP_DIR, download_zip)), exdir = KEEP_DIR)
-      csv_file <- unzipped[grepl("psam", unzipped)]
-      out <- read_csv(csv_file)
-      
-  } else {
-    temp <- tempfile(fileext = ".zip")
-    download.file(url = download_url,
-                  destfile = temp)
-    
-    unzipped <- unzip(temp, exdir = tempdir())
-    csv_file <- unzipped[grepl("psam", unzipped)]
-    out <- read_csv(csv_file)
-    unlink(temp)
-  }
-  
-  return(out)
+p_seed <- function(){
   
 }
+
+
+
+
+#' @title Household seed
+#' 
+#' @description Creates household seed for input to ipf
+#' 
+#' @param h_pums household PUMS data (e.g. downloaded from `get_pums`)
+#' @param OCCP data table/tibble that contains occupational data for target geography
+#' @param AGE_SEX data table/tibble that contains ACS data for target geography stratified by sex and age
+#' @param RACE data table/tibble that contains ACS data for target geography stratified by race/ethnicity
+#' 
+#' @details 
+#' 
+#' @return list containing targets for occupation, age, sex and race for the CT
+#' @export
+#' 
+h_seed <- function(){
+  
+}
+
+
 
 
 
@@ -207,4 +182,86 @@ h_target <- function(CT, INCOME, SIZE){
   )
   
   return(h_targets)
+}
+
+
+
+
+
+
+#' @title Create synthetic population for target census tract
+#' 
+#' @description Creates synthetic population from input target and seed data for a 
+#' 
+#' @param CT character containing name of CT as it appears in ACS data
+#' @param PTGT list generated from `p_target` with person characteristics
+#' @param HTGT list generated from `h_target` with household characteristics
+#' @param PSEED data frame containing person pums data for target geography
+#' @param HSEED data frame containing household pums data for target geography
+#' 
+#' @details 
+#' 
+#' @return data.frame of all generated agents
+#' @export
+#' 
+gen_ct_pop <- function(CT, PTGT, HTGT, PSEED, HSEED) {
+
+  ct_ipu   <- ipu(HSEED, HTGT, PSEED, PTGT, primary_id="SERIALNO")
+  ct_syn_h <- synthesize(ct_ipu$weight_tbl, primary_id="SERIALNO")
+  ct_syn_p <- left_join(ct_syn_h, pseed, by="SERIALNO") %>%
+    mutate(indiv_id=rownames(.),
+           ct = CT) %>% 
+    rename(house_id=new_id) %>%
+    select(house_id, indiv_id, hhsize, hhincome, sex, age, occp, race, ct)
+  
+  ct_syn_p
+}
+
+
+
+
+
+
+#' @title Create synthetic population 
+#' 
+#' @description Creates synthetic population from input target and seed data for a geography larger than a census tract
+#' 
+#' @param CT character containing name of CT as it appears in ACS data
+#' @param PTGT list generated from `p_target` with person characteristics
+#' @param HTGT list generated from `h_target` with household characteristics
+#' @param PSEED data frame containing person pums data for SF county
+#' @param HSEED data frame containing household pums data for SF county 
+#' 
+#' @details 
+#' 
+#' @return data.frame of all generated agents
+#' @export
+#' 
+gen_pop <- function(CTs){
+  
+  # Loop through all cts to construct population
+  pop <- bind_rows(lapply(CTs, function(CT){
+    
+    persons <- p_target(ct, acs_occup_sf, acs_age_sex_sf, acs_race_sf)
+    hh      <- h_target(ct, acs_hh_income_sf, acs_hhsize_sf)
+    
+    ct_pop <- gen_ct_pop(CT = CT, 
+                         PTGT = persons,
+                         HTGT = hh,
+                         PSEED = PSEED,
+                         HSEED = HSEED)
+    
+    return(ct_pop)
+  }))
+  
+  #Correct individual and household ids to give global unique id rather than unique within ct
+  pop$ct_hh_id <- paste0(pop$CT, "_", pop$house_id)  
+  pop$hhid     <- as.numeric(factor(pop$ct_hh_id))
+  pop$house_id <- pop$ct_hh_id <- NULL # remove superfluous columns
+  
+  pop$ct_indiv_id <- paste0(pop$CT, "_", pop$indiv_id)  
+  pop$id          <- as.numeric(factor(pop$ct_indiv_id))
+  pop$indiv_id    <- pop$ct_indiv_id <- NULL # remove superfluous columns
+  
+  return(pop)
 }
