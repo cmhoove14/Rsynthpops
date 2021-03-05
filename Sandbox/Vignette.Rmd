@@ -34,7 +34,6 @@ pums_vars_get <- c(
   "PUMA",   # PUMA region
   "SEX",    # Sex assigned at birth of individual
   "AGEP",   # Age of individual
-  "SCHL",   # Educational attainment
   "SCHG",   # Current grade level if attending school
   "ADJINC", # Income adjustment to be applied to HINCP
   "HINCP",  # Household income over past twelve months
@@ -52,7 +51,9 @@ vt_pums <- tidycensus::get_pums(
   )
 ```
 
-The next step is to generate the household and person seed dataframes. These "seeds" contain target proportions for characteristics of the target population that will be used in iterative proportional fitting along with target population characteristics to generate the population. To generate seeds, we need to incorporate our desired household and person characteristics and the survey weights to estimate. We'll start with the household seed data, and the first step is to determine which of our chosen variables are at the household level
+## Generate population seeds  
+
+The next step is to generate the household and person seed dataframes. These "seeds" contain individual level characteristics of the target population that will be used in iterative proportional fitting along with target population characteristics to generate the population. To generate seeds, we need to incorporate our desired household and person characteristics and the survey weights to correct for over/under representation in the PUMS sample. We'll start with the household seed data, and the first step is to determine which of our chosen variables are at the household level
 
 ```{r hh_vars}
 # Determine which variables are household level
@@ -62,7 +63,8 @@ hh_vars <- vt_vars[which(vt_vars %in% (pums_2018_1yr %>% filter(level == "housin
 hh_vars
 ```
 
-We know that the "WGTP" variable is used for weighting, so our only household level variables are income and household size (number of persons). We'll first combine the household income and inflation adjustment variables into a single household income variable. We also want to avoid stratifying the population too much, else we'll end up with unstable proportions to generate our population, so we'll condense the household income variable into categories as well. We'll use fairly arbitrary cutoffs of <\$50k, \$50k-\$100k, and >\$100k, but you could also use e.g. local poverty rates to better inform this categorization for your specific area. In this case, you might also want to check the distribution of household sizes (NP variable) and consider adding an upper cutoff (e.g. group all households with >=7 individuals). Lastly, we'll get our proportions for the seed dataset. We'll ignore individuals in group quarters for now.
+We know that the "WGTP" variable is used for weighting, so our only household level variables are income and household size (number of persons). We'll first combine the household income and inflation adjustment variables into a single household income variable. We also want to avoid stratifying the population too much, else we'll end up with unstable proportions to generate our population, so we'll condense the household income variable into categories as well. We'll use fairly arbitrary cutoffs of <\$50k, \$50k-\$100k, and >\$100k, but you could also use e.g. local poverty rates to better inform this categorization for your specific area. In this case, you might also want to check the distribution of household sizes (NP variable) and consider adding an upper cutoff (e.g. group all households with >=7 individuals). Lastly, we'll get our proportions for the seed dataset. For now, we won't include anyone living in group quarters, so we'll remove anyone with the "GQ" tag in their serial number
+
 
 ```{r hh_seed}
 # Sum of weighting variable, denominator of proportions
@@ -81,20 +83,59 @@ vt_hh_seed <- vt_pums %>%
                                     HHINCADJ >= 50000 & HHINCADJ < 100000 ~ 2,
                                     HHINCADJ >=100000 ~ 3))
     ) %>% 
-  # Get totals in each category
-  count(PUMA, NP, HHINC_CAT, wt = WGTP, name = "n_group") %>% 
-  # Join with overall toals to get proportions
-  left_join(., pumas_count, by = "PUMA") %>% 
-  mutate(PROP = n_group/n_tot)
-  
-# Verify that props within PUMAs sum to 1
-vt_hh_seed %>% group_by(PUMA) %>% summarise(prop_sum = sum(PROP)) %>% pull(prop_sum)
+  # Cleanup
+  dplyr::select(SERIALNO, HHINC_CAT, NP, WGTP) %>% 
+  rename("hhincome" = HHINC_CAT,
+         "hhsize" = NP,
+         "weight" = WGTP)
+
+head(vt_hh_seed)
 ```
 
 
+Now we'll go through the same process to get the person seeds data frame
+
+```{r p_vars}
+# Determine which variables are person level as those leftover from household vars
+p_vars <- vt_vars[which(!vt_vars %in% hh_vars)]
+
+p_vars
+```
+
+```{r p_seed}
+
+vt_p_seed <- vt_pums %>% 
+  # Ignore individuals in group quarters for now
+  filter(!grepl("GQ", SERIALNO)) %>% 
+  # Restrict to our household variables
+  dplyr::select(unique(c("SERIALNO", "SPORDER", "WGTP", "PWGTP", "PUMA", all_of(p_vars)))) %>% 
+  # Manipulate some variables to prevent small strata
+  mutate(
+    age_cat  = cut(AGEP, breaks = c(0,10,20,30,40,50,60,70,80,Inf), right = FALSE, include.lowest = TRUE),
+    race = if_else(RAC1P %in% c("3", "4", "5"), "3", RAC1P),
+    hispanic = if_else(HISP == "01", 0, 1)
+    ) %>% 
+  # Cleanup
+  dplyr::select(SERIALNO, SCHG, SEX, OCCP, age_cat, race, hispanic, PWGTP) %>% 
+  rename("grade" = SCHG,
+         "sex" = SEX,
+         "occupation" = OCCP,
+         "weight" = PWGTP)
+
+head(vt_p_seed)
+```
+
+## Generate Population targets  
 
 
-For now, we won't include anyone living in group quarters, so we'll remove anyone with the "GQ" tag in their serial number
+
+
+
+
+
+
+
+
 
 ```{r occp_weights}
 # Generate weights from PUMS
