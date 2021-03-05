@@ -25,12 +25,21 @@ gen_synth_pop <- function(FIPS, CHARS, OUT_DIR, KEEP_ALL = TRUE){
       filter(STATEFP == FIPS) %>% 
       pull(PUMA5CE) %>% 
       unique()
-  } else {
+  } else if(nchar(FIPS) == 5){
     PUMS <- cts_to_pumas %>% 
       filter(STCNTYFP == FIPS) %>% 
       pull(PUMA5CE) %>% 
       unique()
+  } else if(nchar(FIPS) == 11){
+    PUMS <- cts_to_pumas %>% 
+      filter(CTFP == FIPS) %>% 
+      pull(PUMA5CE) %>% 
+      unique()
+  } else {
+    stop("Input FIPS code must be length 2 for state, 5 for county, or 11 for census tract")
   }
+  
+  if(length(PUMS)<1){stop("No PUMS records found for input FIPS code")}
     
 # Get all data to generate population   
   p_dat <- get_pums(YEAR      = 2018, 
