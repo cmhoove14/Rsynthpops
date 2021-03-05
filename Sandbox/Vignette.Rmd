@@ -12,34 +12,89 @@ knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
 devtools::load_all()
 ```
 
-## Get data  
-```{r get_data_tidycensus}
-pums_vars_2018 <- pums_variables %>% 
-  filter(year == 2018, survey == "acs1")
+## Overview  
 
-pums_vars_2018 %>% 
-  distinct(var_code, var_label, data_type, level) %>% 
-  View()
+
+## Get data  
+The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` uses functions from `tidycensus` to get PUMS data. `tidycensus` also ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. Below, we see the first few variables available for the 1-year 2018 PUMS data. 
+```{r pums_vars_head}
+#census_api_key(my_key, install = TRUE) # Replace with your census api key
+
+pums_2018_1yr <- pums_variables %>% 
+  filter(year == 2018, survey == "acs1") %>% 
+  distinct(var_code, var_label, data_type, level)
+
+  head(pums_2018_1yr)
 ```
 
+The `get_pums()` function from `tidycensus` automatically retains the `SERIALNO`, `SPORDER`, `WGTP`, `PWGTP`, and `ST` variables, but anything else you want to include should be identified from the `var_code` variable in `pums_variables` and passed in the `variables` argument to `get_pums()`. We'll build on the `tidycensus` [vignette on downloading and using PUMS data](https://walker-data.com/tidycensus/articles/pums-data.html) to build the person and household level target and seed data that will be used to generate the backbone of our synthetic population.
 
 ```{r get_data, message = FALSE}
-p_pums <- get_pums(YEAR      = 2018, 
-                   FIVE_YEAR = TRUE, 
-                   STATE     = "DE", 
-                   LEVEL     = "p", 
-                   KEEP      = TRUE,
-                   KEEP_DIR  = "Sandbox/data/")
+pums_vars_get <- c(
+  "PUMA",   # PUMA region
+  "SEX",    # Sex assigned at birth of individual
+  "AGEP",   # Age of individual
+  "SCHL",   # Educational attainment
+  "SCHG",   # Current grade level if attending school
+  "ADJINC", # Income adjustment to be applied to HINCP
+  "HINCP",  # Household income over past twelve months
+  "NP",     # Number of persons in household
+  "OCCP",   # Current occupation if working
+  "HISP",   # Hispanic origin
+  "RAC1P"   # Racial group
+)
 
-h_pums <- get_pums(YEAR      = 2018, 
-                   FIVE_YEAR = TRUE, 
-                   STATE     = "DE", 
-                   LEVEL     = "h", 
-                   KEEP      = TRUE,
-                   KEEP_DIR  = "Sandbox/data/")
-
-all_pums <- merge(p_pums, h_pums, by = "SERIALNO")
+vt_pums <- tidycensus::get_pums(
+  variables = pums_vars_get,
+  state     = "VT",
+  survey    = "acs1",
+  year      = 2018
+  )
 ```
+
+The next step is to generate the household and person seed dataframes. These "seeds" contain target proportions for characteristics of the target population that will be used in iterative proportional fitting along with target population characteristics to generate the population. To generate seeds, we need to incorporate our desired household and person characteristics and the survey weights to estimate. We'll start with the household seed data, and the first step is to determine which of our chosen variables are at the household level
+
+```{r hh_vars}
+# Determine which variables are household level
+vt_vars <- colnames(vt_pums)
+hh_vars <- vt_vars[which(vt_vars %in% (pums_2018_1yr %>% filter(level == "housing") %>% pull(var_code)))]
+
+hh_vars
+```
+
+We know that the "WGTP" variable is used for weighting, so our only household level variables are income and household size (number of persons). We'll first combine the household income and inflation adjustment variables into a single household income variable. We also want to avoid stratifying the population too much, else we'll end up with unstable proportions to generate our population, so we'll condense the household income variable into categories as well. We'll use fairly arbitrary cutoffs of <\$50k, \$50k-\$100k, and >\$100k, but you could also use e.g. local poverty rates to better inform this categorization for your specific area. In this case, you might also want to check the distribution of household sizes (NP variable) and consider adding an upper cutoff (e.g. group all households with >=7 individuals). Lastly, we'll get our proportions for the seed dataset. We'll ignore individuals in group quarters for now.
+
+```{r hh_seed}
+# Sum of weighting variable, denominator of proportions
+pumas_count <- vt_pums %>% 
+  dplyr::count(PUMA, wt = WGTP, name = "n_tot")
+
+vt_hh_seed <- vt_pums %>% 
+  # Ignore individuals in group quarters for now
+  filter(!grepl("GQ", SERIALNO)) %>% 
+  # Restrict to our household variables
+  dplyr::select(c("SERIALNO", "SPORDER", "WGTP", "PWGTP", "PUMA", all_of(hh_vars))) %>% 
+  # Create household income adjusted for inflation variable and then categorize
+  mutate(
+    HHINCADJ  = HINCP*as.numeric(ADJINC),
+    HHINC_CAT = as.factor(case_when(HHINCADJ < 50000 ~ 1,
+                                    HHINCADJ >= 50000 & HHINCADJ < 100000 ~ 2,
+                                    HHINCADJ >=100000 ~ 3))
+    ) %>% 
+  # Get totals in each category
+  count(PUMA, NP, HHINC_CAT, wt = WGTP, name = "n_group") %>% 
+  # Join with overall toals to get proportions
+  left_join(., pumas_count, by = "PUMA") %>% 
+  mutate(PROP = n_group/n_tot)
+  
+# Verify that props within PUMAs sum to 1
+vt_hh_seed %>% group_by(PUMA) %>% summarise(prop_sum = sum(PROP)) %>% pull(prop_sum)
+```
+
+
+
+
+For now, we won't include anyone living in group quarters, so we'll remove anyone with the "GQ" tag in their serial number
 
 ```{r occp_weights}
 # Generate weights from PUMS
