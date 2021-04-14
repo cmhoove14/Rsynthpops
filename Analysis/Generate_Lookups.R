@@ -22,7 +22,16 @@ OCC_list <- OCC_init %>%
   mutate(occ_group = as.numeric(substr(Code2,1,2)))
 
 # Get occupational variable descriptors from acs to match to pums
-acs_vars_subject<-tidycensus::load_variables(2019, paste0("acs5", "/subject"), cache=FALSE) %>% 
+acs_vars<-tidycensus::load_variables(2019, "acs5", cache=FALSE)
+acs_vars_subject<-tidycensus::load_variables(2019, paste0("acs5", "/subject"), cache=FALSE)
+
+# acs_vars_occp_all <- acs_vars %>% 
+#   filter(grepl("B24114", name)) %>% 
+#   slice(-1) %>% # REmove aggregate total
+#   separate(label, into = paste("level",1:3, sep = ""), sep = "!!")
+  
+
+acs_vars_occp <- acs_vars_subject %>% 
   filter(grepl("S2401_C01", name)) %>% 
   separate(label, into = paste("level",1:6, sep = ""), sep = "!!") %>% 
   filter(!is.na(level4)) %>% 
@@ -33,7 +42,7 @@ acs_vars_subject<-tidycensus::load_variables(2019, paste0("acs5", "/subject"), c
   
 acs_occp_lookup <- OCC_list %>% 
   mutate(occp_match = gsub(" ","",stringr::str_to_lower(gsub("[[:punct:]]","", Description)))) %>% 
-  left_join(acs_vars_subject, by = "occp_match") %>% 
+  left_join(acs_vars_occp, by = "occp_match") %>% 
   dplyr::select(Code:name) %>% 
   rename("acs_var" = name)
 
@@ -42,7 +51,6 @@ usethis::use_data(acs_occp_lookup, overwrite = T)
 
 
 # Age by sex lookup table ------------
-acs_vars<-tidycensus::load_variables(2019, "acs5", cache=FALSE)
 
 # Function to extract numbers from string
 extract_numbers_min <- function(string){
