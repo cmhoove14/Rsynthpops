@@ -183,6 +183,16 @@ acs_race_state <- get_acs(
 ) %>% 
   mutate(county_fips = substr(GEOID,1,5))
 
+# School grade ----------------
+acs_grade <- get_acs(
+  geography = "tract", 
+  table     = "B14007", 
+  year      = year_use, 
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
 # household size -----------------------
 acs_hhsize<- get_acs(
   geography = "tract",
@@ -227,6 +237,29 @@ acs_occup <- get_acs(
 
 ```
 
+
+```{r h_targets}
+# household size -----------------------
+acs_hhsize_tgt <- acs_hhsize %>%
+  filter(county_fips == fips_use) %>% 
+  mutate(hhtype = if_else(grepl("fam", variable), 1, 2),
+         hhsize = parse_number(variable)) %>% 
+  dplyr::select(GEOID, estimate, hhtype, hhsize) %>% 
+  pivot_wider(names_from = hhsize,values_from = estimate)
+
+# household income ---------------
+acs_hh_income_tgt <- acs_hh_income %>%
+  filter(county_fips == fips_use) %>% 
+  left_join(acs_hhincome_lookup, by = c("variable" = "name")) %>% 
+  filter(!is.na(label)) %>% 
+  # match income groups to seed data
+  mutate(hhincome = as.factor(case_when(income_max < 50000 ~ 1,
+                                        income_min >= 50000 & income_max < 100000 ~2,
+                                        income_min >= 100000 ~3))) %>% 
+  dplyr::select(GEOID, estimate, hhincome)
+
+```
+
 ```{r p_targets}
 # Age by sex -------------
 acs_age_sex_tgt <- acs_age_sex_state %>%
@@ -248,7 +281,8 @@ acs_age_sex_tgt <- acs_age_sex_state %>%
   rename("sex" = sex_num) %>% 
   group_by(GEOID,sex,age_cat) %>% 
   summarise(estimate = sum(estimate)) %>% 
-  ungroup()
+  ungroup() %>% 
+  pivot_wider(names_from = )
 
 # Race ---------------------
 acs_race_tgt <- acs_race_state %>%
@@ -269,6 +303,12 @@ acs_race_tgt <- acs_race_state %>%
   summarise(estimate = sum(estimate)) %>% 
   ungroup()
 
+# School grade ----------------
+acs_grade_tgt <- acs_grade %>% 
+  filter(county_fips == fips_use) %>% 
+  left_join(acs_grade_lookup, by = c("variable" = "name")) %>% 
+  filter(!variable %in% )
+
 # Occupation --------------
 # Filter out higher level aggregations of occupational classes to only get lowest level classes
 lowest_acs_occp_vars <- acs_occp_lookup %>% 
@@ -285,7 +325,7 @@ acs_occup_tgt <- acs_occup %>%
   ungroup()
 
 # No unemployed counts in acs data, so need to determine number of people not working by subtracting working population from total population
-pop_totals <- acs_age_sex_tgt %>% filter(variable == "B01001_001") # Total population
+pop_totals <- acs_age_sex_tgt %>% group_by(GEOID) %>% summarise(estimate = sum(estimate)) # Total population
 wrk_totals <- acs_occup_tgt %>% group_by(GEOID) %>% summarise(estimate = sum(estimate)) #Total working population
 
 nwrk_pop <- pop_totals %>% left_join(wrk_totals, by = "GEOID") %>% #Total non-working population
@@ -300,27 +340,24 @@ sum(acs_occup_tgt %>% group_by(GEOID) %>% summarise(tpop = sum(estimate)) %>% le
 
 ```
 
-```{r h_targets}
-# household size -----------------------
-acs_hhsize_tgt <- acs_hhsize %>%
-  filter(county_fips == fips_use) %>% 
-  mutate(hhtype = if_else(grepl("fam", variable), 1, 2),
-         hhsize = parse_number(variable)) %>% 
-  dplyr::select(GEOID, estimate, hhtype, hhsize)
-
-# household income ---------------
-acs_hh_income_tgt <- acs_hh_income %>%
-  filter(county_fips == fips_use) %>% 
-  left_join(acs_hhincome_lookup, by = c("variable" = "name")) %>% 
-  filter(!is.na(label)) %>% 
-  # match income groups to seed data
-  mutate(hhincome = as.factor(case_when(income_max < 50000 ~ 1,
-                                        income_min >= 50000 & income_max < 100000 ~2,
-                                        income_min >= 100000 ~3))) %>% 
-  dplyr::select(GEOID, estimate, hhincome)
-
-```
-
 Next we need to make sure that the levels of our variables match in both the seed and target data.
 
+```{r synthesize}
+ct_synth <- function(ct_fips, h_seed, p_seed, h_tgt, p_tgt){
+  ct_ipu <- ipu(h_seed, h_tgt, p_seed, p_tgt, primary_id="SERIALNO")
+  ct_syn_h <- synthesize(ct_ipu$weight_tbl, primary_id="SERIALNO")
+  ct_syn_p <- left_join(ct_syn_h, p_seed, by="SERIALNO") %>%
+    mutate(indiv_id=rownames(.)) %>% 
+    rename(house_id=new_id) #%>% select(house_id, indiv_id, hhsize, hhincome, sex, age, occp, race)
+  
+  return(ct_syn_p)
+
+}
+
+sf_pop <- bind_rows(lapply(unique(wrk_totals$GEOID), function(ct){
+  puma_ct <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+  
+  ct_h_tgt <- 
+}))
+```
 
