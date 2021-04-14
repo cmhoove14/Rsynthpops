@@ -1,7 +1,6 @@
 ---
 title: "Generate A Population"
 author: "Chris Hoover"
-date: "3/1/2021"
 output: html_document
 ---
 
@@ -17,19 +16,30 @@ devtools::load_all()
 
 ## Get data  
 The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` uses functions from `tidycensus` to get PUMS data. `tidycensus` also ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. Below, we see the first few variables available for the 1-year 2018 PUMS data. 
-```{r pums_vars_head}
-#census_api_key(my_key, install = TRUE) # Replace with your census api key
 
-pums_2018_1yr <- pums_variables %>% 
-  filter(year == 2018, survey == "acs1") %>% 
-  distinct(var_code, var_label, data_type, level)
+We'll generate data for San Francisco, CA as an example for this exercise.
 
-  head(pums_2018_1yr)
+```{r SF_setup}
+state_use  = "CA"
+fips_use   = "06075" # San Francisco county fips code
+year_use   = 2019
+survey_use = "acs5"
 ```
 
-The `get_pums()` function from `tidycensus` automatically retains the `SERIALNO`, `SPORDER`, `WGTP`, `PWGTP`, and `ST` variables, but anything else you want to include should be identified from the `var_code` variable in `pums_variables` and passed in the `variables` argument to `get_pums()`. We'll build on the `tidycensus` [vignette on downloading and using PUMS data](https://walker-data.com/tidycensus/articles/pums-data.html) to build the person and household level target and seed data that will be used to generate the backbone of our synthetic population.
+```{r pums_vars_head}
+#census_api_key(my_key, install = TRUE) # Replace `my_key` with your census api key
 
-```{r get_data, message = FALSE}
+pums_vars <- pums_variables %>% 
+  filter(year == year_use, survey == survey_use) %>% 
+  # The distinct call shows one row per variable but can be removed to show all levels of all variables  
+  distinct(var_code, var_label, data_type, level)
+
+  head(pums_vars, n = 10)
+```
+
+The `get_pums()` function from `tidycensus` automatically retains the `SERIALNO`, `SPORDER`, `WGTP`, `PWGTP`, and `ST` variables for the state or states from which data is requested, but anything else you want to include should be identified from the `var_code` variable in `pums_variables` and passed in the `variables` argument to `get_pums()`. We'll build on the `tidycensus` [vignette on downloading and using PUMS data](https://walker-data.com/tidycensus/articles/pums-data.html) to build the person and household level target and seed data that will be used to generate the backbone of our synthetic population. **Note**: this might take a few minutes depending on the population size you're working with.  
+
+```{r get_data, message=FALSE, include = FALSE, cache=TRUE}
 pums_vars_get <- c(
   "PUMA",   # PUMA region
   "SEX",    # Sex assigned at birth of individual
@@ -38,17 +48,25 @@ pums_vars_get <- c(
   "ADJINC", # Income adjustment to be applied to HINCP
   "HINCP",  # Household income over past twelve months
   "NP",     # Number of persons in household
+  "HHT",    # Household type (family, non family)
   "OCCP",   # Current occupation if working
   "HISP",   # Hispanic origin
   "RAC1P"   # Racial group
 )
 
-vt_pums <- tidycensus::get_pums(
-  variables = pums_vars_get,
-  state     = "VT",
-  survey    = "acs1",
-  year      = 2018
+CA_pums <- tidycensus::get_pums(
+    variables = pums_vars_get,
+    state     = state_use,
+    survey    = survey_use,
+    year      = year_use
   )
+```
+
+Once data has been downloaded for the entire state, it may need to be further filtered to your target geography. This can be done by identifying the PUMAs (Public Use Microdata Areas) that fall within your target geography, here the county of San Francisco. Luckily, a similar FIPS naming convention applies for PUMAs and counties, so filtering by PUMAs that contain the three digit FIPS county code, 075 for San Francisco, will parse the full state into the target county. For sub-county level target geographies such as census tracts, `Rsynthpops` ships with a dataframe `cts_to_pumas` that contains a lookup table relating PUMAs to state, county, and census tract FIPs codes.
+
+```{r SF_pumas}
+SF_pums <- CA_pums %>% 
+  filter(grepl("075", PUMA))
 ```
 
 ## Generate population seeds  
@@ -57,21 +75,17 @@ The next step is to generate the household and person seed dataframes. These "se
 
 ```{r hh_vars}
 # Determine which variables are household level
-vt_vars <- colnames(vt_pums)
-hh_vars <- vt_vars[which(vt_vars %in% (pums_2018_1yr %>% filter(level == "housing") %>% pull(var_code)))]
+SF_vars <- colnames(SF_pums)
+hh_vars <- SF_vars[which(SF_vars %in% (pums_vars %>% filter(level == "housing") %>% pull(var_code)))]
 
 hh_vars
 ```
 
-We know that the "WGTP" variable is used for weighting, so our only household level variables are income and household size (number of persons). We'll first combine the household income and inflation adjustment variables into a single household income variable. We also want to avoid stratifying the population too much, else we'll end up with unstable proportions to generate our population, so we'll condense the household income variable into categories as well. We'll use fairly arbitrary cutoffs of <\$50k, \$50k-\$100k, and >\$100k, but you could also use e.g. local poverty rates to better inform this categorization for your specific area. In this case, you might also want to check the distribution of household sizes (NP variable) and consider adding an upper cutoff (e.g. group all households with >=7 individuals). Lastly, we'll get our proportions for the seed dataset. For now, we won't include anyone living in group quarters, so we'll remove anyone with the "GQ" tag in their serial number
+We know that the "WGTP" variable is used for weighting, so our only household level variables are income and household size (number of persons, `NP`). We'll first combine the household income and inflation adjustment variables into a single household income variable. We also want to avoid stratifying the population too much, else we'll end up with unstable proportions to generate our population, so we'll condense the household income variable into categories as well. We'll use fairly arbitrary cutoffs of <\$50k, \$50k-\$100k, and >\$100k, but you could also use e.g. local poverty rates to better inform this categorization for your specific area. In this case, you might also want to check the distribution of household sizes (NP variable) and consider adding an upper cutoff (e.g. group all households with >=7 individuals). Lastly, we'll get our proportions for the seed dataset. For now, we won't include anyone living in group quarters, so we'll remove anyone with the "GQ" tag in their serial number
 
 
 ```{r hh_seed}
-# Sum of weighting variable, denominator of proportions
-pumas_count <- vt_pums %>% 
-  dplyr::count(PUMA, wt = WGTP, name = "n_tot")
-
-vt_hh_seed <- vt_pums %>% 
+SF_hh_seed <- SF_pums %>% 
   # Ignore individuals in group quarters for now
   filter(!grepl("GQ", SERIALNO)) %>% 
   # Restrict to our household variables
@@ -81,81 +95,232 @@ vt_hh_seed <- vt_pums %>%
     HHINCADJ  = HINCP*as.numeric(ADJINC),
     HHINC_CAT = as.factor(case_when(HHINCADJ < 50000 ~ 1,
                                     HHINCADJ >= 50000 & HHINCADJ < 100000 ~ 2,
-                                    HHINCADJ >=100000 ~ 3))
+                                    HHINCADJ >=100000 ~ 3)),
+    HHT       = if_else(HHT %in% c("1", "2", "3"), 1, 2)     # Family for 1,2,3 ; GQ/other/Non-family for b, 4-7
     ) %>% 
   # Cleanup
-  dplyr::select(SERIALNO, HHINC_CAT, NP, WGTP) %>% 
+  dplyr::select(SERIALNO, HHINC_CAT, HHT, NP, WGTP) %>% 
   rename("hhincome" = HHINC_CAT,
          "hhsize" = NP,
+         "hhtype" = HHT, 
          "weight" = WGTP)
 
-head(vt_hh_seed)
+head(SF_hh_seed)
 ```
 
-
-Now we'll go through the same process to get the person seeds data frame
+Now we'll go through the same process to get the person seeds data frame. Similar to household income and size variables, any variables that are continuous, have many levels, or have levels with small frequencies will likely need to be condensed in order to produce stable weights for the iterative proportional fitting algorithm. Below we condense age into decadal increments, but also maintain the school grade variable, `SCHG`, in order to place school-aged children into classes.  
 
 ```{r p_vars}
 # Determine which variables are person level as those leftover from household vars
-p_vars <- vt_vars[which(!vt_vars %in% hh_vars)]
+p_vars <- SF_vars[which(!SF_vars %in% hh_vars)]
 
 p_vars
 ```
 
 ```{r p_seed}
 
-vt_p_seed <- vt_pums %>% 
+SF_p_seed <- SF_pums %>% 
   # Ignore individuals in group quarters for now
   filter(!grepl("GQ", SERIALNO)) %>% 
-  # Restrict to our household variables
+  # Restrict to our person variables
   dplyr::select(unique(c("SERIALNO", "SPORDER", "WGTP", "PWGTP", "PUMA", all_of(p_vars)))) %>% 
-  # Manipulate some variables to prevent small strata
   mutate(
-    age_cat  = cut(AGEP, breaks = c(0,10,20,30,40,50,60,70,80,Inf), right = FALSE, include.lowest = TRUE),
+    # Condense age into categories
+    age_cat  = cut(AGEP, breaks = c(0,10,20,30,40,50,60,70,80,Inf), labels = FALSE, right = FALSE, include.lowest = TRUE),
+    # Condense American Indian and Alaska Native categories to match acs reporting of aggregate totals
     race = if_else(RAC1P %in% c("3", "4", "5"), "3", RAC1P),
+    # make hispanic category numeric
     hispanic = if_else(HISP == "01", 0, 1)
     ) %>% 
   # Cleanup
   dplyr::select(SERIALNO, SCHG, SEX, OCCP, age_cat, race, hispanic, PWGTP) %>% 
-  rename("grade" = SCHG,
-         "sex" = SEX,
+  rename("grade"      = SCHG,
+         "sex"        = SEX,
          "occupation" = OCCP,
-         "weight" = PWGTP)
+         "weight"     = PWGTP) %>% 
+  # Merge with lookup table which relates acs and occp codes then add code 9 for unemployed/retired/in school
+  left_join(acs_occp_lookup %>% dplyr::select(Code, d2_code),
+            by = c("occupation" = "Code")) %>% 
+  mutate(d2_code = if_else(occupation == "0009", 9, d2_code))
 
-head(vt_p_seed)
+head(SF_p_seed)
 ```
 
 ## Generate Population targets  
+Census data is reported in aggregate at the census block, census block group, census tract, county, and state levels. PUMS data is reported for individuals within PUMA areas that are somewhere between a census tract and a county in size and population. The target data to be fed into `ipu` thus provides a target for the synthetic population generator to replicate, while also maintaining correlations between variables found in the individual records of the seed datasets.
 
+The first step for target data is to download aggregate census data with characteristics matching the seed data. This is perhaps the most tedious exercise of the entire process as we need to find the variables in the aggregate census dataset that match the variables we've chose in our seed datasets, then match the levels of each variable from the seed data to the aggregate data. We can use the `load_variables()` function from `tidycensus` to get a full list of available variables from the same survey we use to get the PUMS data. Most variables can likely be found in the default dataset called from `load_variables`, but some may be found in the `survey/profile` or `survey/subject` datasets (where `survey` should be replaced by the data survey being used, e.g. "acs5").  
 
+**TO-DO: Start compiling reference of PUMS to ACS variable matches**
 
+```{r acs_vars}
+acs_vars<-load_variables(year_use, survey_use, cache=FALSE)
+head(acs_vars)
 
-
-
-
-
-
-
-
-```{r occp_weights}
-# Generate weights from PUMS
-  p_occp <- p_pums %>% 
-    group_by(OCCP) %>%
-    summarise(num = n(), prop = num/nrow(.)) %>%
-    left_join(OCC_list, by = c("OCCP" = "Code")) %>%
-    ungroup() %>%
-    mutate(Group_Code = if_else(is.na(Group_Code), "00", str_pad(Group_Code, 2, pad = "0")))
+acs_vars_subject<-load_variables(year_use, paste0(survey_use, "/subject"), cache=FALSE)
+acs_vars_profile<-load_variables(year_use, paste0(survey_use, "/profile"), cache=FALSE)
 
 ```
 
-## Generate seeds  
-```{r gen_seeds}
-h_seed<- hca_pums %>% 
-  filter(PUMA %in% c("07501", "07502", "07503", "07504", "07505", "07506", "07507"), NP!=0, !is.na(SERIALNO), !is.na(HINCP)) %>%
-  mutate(hhsize = ifelse(NP > 6, 7, NP), 
-         hhincome = HINCP *(ADJINC/1000000), # adjust all income to 2018 dollars
-         hhincome = cut(HINCP, breaks = c(-20000, 50000, 100000, Inf), include.lowest = TRUE, right = FALSE), hhincome = as.numeric(hhincome)) %>%
-  dplyr::select(SERIALNO, hhsize, hhincome)
+```{r acs_get, message = FALSE, cache = TRUE}
+# Age by sex -------------
+acs_age_sex_state <- get_acs(
+  geography = "tract", 
+  table     = "B01001", 
+  year      = year_use, 
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# Race ---------------------
+acs_race_state <- get_acs(
+  geography = "tract", 
+  table     = "B03002", 
+  year      = year_use,  
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# household size -----------------------
+acs_hhsize<- get_acs(
+  geography = "tract",
+  variables = c(fam_2     ="B11016_003", 
+                fam_3     ="B11016_004", 
+                fam_4     ="B11016_005",
+                fam_5     ="B11016_006", 
+                fam_6     ="B11016_007", 
+                fam_7plus ="B11016_008",
+                non_1     ="B11016_010", 
+                non_2     ="B11016_011", 
+                non_3     ="B11016_012",
+                non_4     ="B11016_013", 
+                non_5     ="B11016_014", 
+                non_6     ="B11016_015",
+                non_7plus ="B11016_016"),
+  state     = state_use,
+  year      = year_use,
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# household income ---------------
+acs_hh_income <- get_acs(
+  geography = "tract", 
+  table     = "S1901", 
+  year      = year_use,  
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# Occupation --------------
+acs_occup <- get_acs(
+  geography = "tract", 
+  table     = "S2401", 
+  year      = year_use, 
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
 
 ```
+
+```{r p_targets}
+# Age by sex -------------
+acs_age_sex_tgt <- acs_age_sex_state %>%
+  filter(county_fips == fips_use) %>% 
+  # merge with acs_sex_by_age lookup table to get age categories and sex associated with each variable
+  left_join(acs_sex_by_age, by = c("variable" = "name")) %>% 
+  filter(!variable %in% c("B01001_001", "B01001_002","B01001_026")) %>%  # Remove total aggregate, aggregate male, aggregate female counts 
+  # match decile age groups to seed data
+  mutate(age_cat = case_when(age_max < 10 ~ 1,
+                             age_min >= 10 & age_max < 20 ~2,
+                             age_min >= 20 & age_max < 30 ~3,
+                             age_min >= 30 & age_max < 40 ~4,
+                             age_min >= 40 & age_max < 50 ~5,
+                             age_min >= 50 & age_max < 60 ~6,
+                             age_min >= 60 & age_max < 70 ~7,
+                             age_min >= 70 & age_max < 80 ~8,
+                             age_min >= 80 ~9)) %>% 
+  dplyr::select(GEOID, estimate, sex_num, age_cat) %>% 
+  rename("sex" = sex_num) %>% 
+  group_by(GEOID,sex,age_cat) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup()
+
+# Race ---------------------
+acs_race_tgt <- acs_race_state %>%
+  filter(county_fips == fips_use) %>% 
+  # merge with lookup table to get race categories and binary ethnicity associated with each variable
+  left_join(acs_race_eth_lookup, by = c("variable" = "name")) %>% 
+  filter(!variable %in% c("B03002_001", "B03002_002", "B03002_012")) %>% # Remove aggregate totals variables
+  # recode race variable to match pums seed data
+  mutate(race = case_when(grepl("White", race) ~ 1,
+                          grepl("Black", race) ~ 2,
+                          grepl("American Indian", race) ~ 3,
+                          grepl("Asian", race) ~ 6,
+                          grepl("Native Hawaiian", race) ~ 7,
+                          grepl("Some other", race) ~ 8,
+                          grepl("Two or more", race) ~ 9)) %>% 
+  dplyr::select(GEOID, estimate, hispanic, race) %>% 
+  group_by(GEOID,hispanic,race) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup()
+
+# Occupation --------------
+# Filter out higher level aggregations of occupational classes to only get lowest level classes
+lowest_acs_occp_vars <- acs_occp_lookup %>% 
+  filter(str_length(Code2) < 10, !is.na(acs_var)) %>% 
+  pull(acs_var)
+
+acs_occup_tgt <- acs_occup %>%
+  filter(county_fips == fips_use,
+         variable %in% lowest_acs_occp_vars) %>% 
+  # Merge with lookup table in order to match with seed data
+  left_join(acs_occp_lookup, by = c("variable" = "acs_var")) %>% 
+  group_by(GEOID, d2_code) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup()
+
+# No unemployed counts in acs data, so need to determine number of people not working by subtracting working population from total population
+pop_totals <- acs_age_sex_tgt %>% filter(variable == "B01001_001") # Total population
+wrk_totals <- acs_occup_tgt %>% group_by(GEOID) %>% summarise(estimate = sum(estimate)) #Total working population
+
+nwrk_pop <- pop_totals %>% left_join(wrk_totals, by = "GEOID") %>% #Total non-working population
+  mutate(d2_code = 9,
+         estimate = estimate.x - estimate.y) %>% 
+  dplyr::select(GEOID, d2_code, estimate)
+
+acs_occup_tgt <- rbind(acs_occup_tgt, nwrk_pop)
+
+#Check to make sure population classified into working groups is equal to total population
+sum(acs_occup_tgt %>% group_by(GEOID) %>% summarise(tpop = sum(estimate)) %>% left_join(pop_totals) %>% mutate(errors = tpop-estimate) %>% pull(errors)) == 0
+
+```
+
+```{r h_targets}
+# household size -----------------------
+acs_hhsize_tgt <- acs_hhsize %>%
+  filter(county_fips == fips_use) %>% 
+  mutate(hhtype = if_else(grepl("fam", variable), 1, 2),
+         hhsize = parse_number(variable)) %>% 
+  dplyr::select(GEOID, estimate, hhtype, hhsize)
+
+# household income ---------------
+acs_hh_income_tgt <- acs_hh_income %>%
+  filter(county_fips == fips_use) %>% 
+  left_join(acs_hhincome_lookup, by = c("variable" = "name")) %>% 
+  filter(!is.na(label)) %>% 
+  # match income groups to seed data
+  mutate(hhincome = as.factor(case_when(income_max < 50000 ~ 1,
+                                        income_min >= 50000 & income_max < 100000 ~2,
+                                        income_min >= 100000 ~3))) %>% 
+  dplyr::select(GEOID, estimate, hhincome)
+
+```
+
+Next we need to make sure that the levels of our variables match in both the seed and target data.
+
 
