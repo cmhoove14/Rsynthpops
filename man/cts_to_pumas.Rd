@@ -10,7 +10,9 @@ A data frame with 74091 rows and 4 variables:
   \item{STATEFP}{two-digit state fips code,e.g. 01 = Alabama}
   \item{COUNTYFP}{three digit county fips code}
   \item{TRACTCE}{six-digit census tract fips code}
-  \item{PEMA5CE}{5-digit code for PUMA area}
+  \item{PUMA5CE}{5-digit code for PUMA area}
+  \item{STCNTYFP}{combined state and county fips code}
+  \item{CTFP}{combined state, county, census tract fips code}
   ...
 }
 }

@@ -9,7 +9,9 @@
 #'   \item{STATEFP}{two-digit state fips code,e.g. 01 = Alabama}
 #'   \item{COUNTYFP}{three digit county fips code}
 #'   \item{TRACTCE}{six-digit census tract fips code}
-#'   \item{PEMA5CE}{5-digit code for PUMA area}
+#'   \item{PUMA5CE}{5-digit code for PUMA area}
+#'   \item{STCNTYFP}{combined state and county fips code}
+#'   \item{CTFP}{combined state, county, census tract fips code}
 #'   ...
 #' }
 #' @source \url{https://www2.census.gov/geo/docs/maps-data/data/rel/2010_Census_Tract_to_2010_PUMA.txt}
