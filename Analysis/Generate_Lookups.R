@@ -80,7 +80,7 @@ usethis::use_data(acs_race_eth_lookup, overwrite = T)
 acs_grade_lookup <- acs_vars %>% 
   filter(grepl("B14007_", name)) %>% 
   slice(-c(1,2)) %>% # remove aggregate totals
-  mutate(grade = c(paste0("0", c(1:16)), "bb")) %>%  # Match levels in pums data
+  mutate(grade = c(paste0("0", c(1:9)), 10:16, "bb")) %>%  # Match levels in pums data
   dplyr::select(name, label,grade)
   
 usethis::use_data(acs_grade_lookup, overwrite = T)
