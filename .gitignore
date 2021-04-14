@@ -1,5 +1,6 @@
 # Directories
 Sandbox/data
+Admin
 
 # History files
 .Rhistory
@@ -10,6 +11,7 @@ Sandbox/data
 
 # User-specific files
 .Ruserdata
+.DS_Store
 
 # Example code in package build process
 *-Ex.R
