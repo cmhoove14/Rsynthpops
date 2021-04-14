@@ -96,18 +96,16 @@ SF_hh_seed <- SF_pums %>%
     HHINC_CAT = as.factor(case_when(HHINCADJ < 50000 ~ 1,
                                     HHINCADJ >= 50000 & HHINCADJ < 100000 ~ 2,
                                     HHINCADJ >=100000 ~ 3)),
+    NP        = if_else(NP >= 7, 7, NP), # any households with >7 people grouped together to match acs
     HHT       = if_else(HHT %in% c("1", "2", "3"), 1, 2)     # Family for 1,2,3 ; GQ/other/Non-family for b, 4-7
     ) %>% 
   # Only one observation per household
   group_by(SERIALNO) %>% 
   summarise(across(.cols = everything(),
                    .fns = first)) %>% 
-  # Join to get tract geography
-  left_join(cts_to_pumas, by = c("PUMA" = "PUMA5CE")) %>% 
   # Cleanup
-  dplyr::select(SERIALNO, CTFP, HHINC_CAT, HHT, NP, WGTP) %>% 
-  rename("geo_tract" = CTFP,
-         "hhincome" = HHINC_CAT,
+  dplyr::select(SERIALNO, PUMA, HHINC_CAT, HHT, NP, WGTP) %>% 
+  rename("hhincome" = HHINC_CAT,
          "hhsize" = NP,
          "hhtype" = HHT, 
          "weight" = WGTP)
@@ -142,7 +140,7 @@ SF_p_seed <- SF_pums %>%
     hispanic = if_else(HISP == "01", 0, 1)
     ) %>% 
   # Cleanup
-  dplyr::select(SERIALNO, SCHG, SEX, OCCP, age_cat, race, hispanic, PWGTP) %>% 
+  dplyr::select(SERIALNO, PUMA, SCHG, SEX, OCCP, age_cat, race, hispanic, PWGTP) %>% 
   rename("grade"      = SCHG,
          "sex"        = SEX,
          "occupation" = OCCP,
@@ -158,9 +156,7 @@ head(SF_p_seed)
 ## Generate population targets  
 Census data is reported in aggregate at the census block, census block group, census tract, county, and state levels. PUMS data is reported for individuals within PUMA areas that are somewhere between a census tract and a county in size and population. The target data to be fed into `ipu` thus provides a target for the synthetic population generator to replicate, while also maintaining correlations between variables found in the individual records of the seed datasets.
 
-The first step for target data is to download aggregate census data with characteristics matching the seed data. This is perhaps the most tedious exercise of the entire process as we need to find the variables in the aggregate census dataset that match the variables we've chose in our seed datasets, then match the levels of each variable from the seed data to the aggregate data. We can use the `load_variables()` function from `tidycensus` to get a full list of available variables from the same survey we use to get the PUMS data. Most variables can likely be found in the default dataset called from `load_variables`, but some may be found in the `survey/profile` or `survey/subject` datasets (where `survey` should be replaced by the data survey being used, e.g. "acs5").  
-
-**TO-DO: Start compiling reference of PUMS to ACS variable matches**
+The first step for target data is to download aggregate census data with characteristics matching the seed data. This is perhaps the most tedious exercise of the entire process as we need to find the variables in the aggregate census dataset that match the variables we've chose in our seed datasets, then match the levels of each variable from the seed data to the aggregate data. We can use the `load_variables()` function from `tidycensus` to get a full list of available variables from the same survey we use to get the PUMS data. Most variables can likely be found in the default dataset called from `load_variables`, but some may be found in the `survey/profile` or `survey/subject` datasets (where `survey` should be replaced by the data survey being used, e.g. "acs5"). A number of lookup tables that relate acs variable names to puma variables to aid matching acs to puma categories are shipped with `Rsynthpops` and their derivation can be found in `Analysis/Generate_Lookups`
 
 ```{r acs_vars}
 acs_vars<-load_variables(year_use, survey_use, cache=FALSE)
@@ -375,7 +371,7 @@ lowest_acs_occp_vars <- acs_occp_lookup %>%
   filter(str_length(Code2) < 10, !is.na(acs_var)) %>% 
   pull(acs_var)
 
-acs_occup_tgt <- acs_occup %>%
+acs_occup_tgt_init <- acs_occup %>%
   filter(county_fips == fips_use,
          variable %in% lowest_acs_occp_vars) %>% 
   # Merge with lookup table in order to match with seed data
@@ -387,17 +383,23 @@ acs_occup_tgt <- acs_occup %>%
 
 # No unemployed counts in acs data, so need to determine number of people not working by subtracting working population from total population
 pop_totals <- acs_sex_tgt %>% mutate(estimate = `1`+`2`) # Total population
-wrk_totals <- acs_occup_tgt %>% group_by(geo_tract) %>% summarise(estimate = sum(estimate)) #Total working population
+wrk_totals <- acs_occup_tgt_init %>% group_by(geo_tract) %>% summarise(estimate = sum(estimate)) #Total working population
 
 nwrk_pop <- pop_totals %>% left_join(wrk_totals, by = c("geo_tract")) %>% #Total non-working population
   mutate(occ_group = 9,
          estimate = estimate.x - estimate.y) %>% 
   dplyr::select(geo_tract, occ_group, estimate)
 
-acs_occup_tgt <- rbind(acs_occup_tgt, nwrk_pop)
-
 #Check to make sure population classified into working groups is equal to total population
-sum(acs_occup_tgt %>% group_by(geo_tract) %>% summarise(tpop = sum(estimate)) %>% left_join(pop_totals) %>% mutate(errors = tpop-estimate) %>% pull(errors)) == 0
+sum(acs_occup_tgt_init %>% group_by(geo_tract) %>% summarise(tpop = sum(estimate)) %>% left_join(pop_totals) %>% mutate(errors = tpop-estimate) %>% pull(errors)) == 0
+
+# Pivot wider for final
+
+acs_occup_tgt <- rbind(acs_occup_tgt_init, nwrk_pop) %>% 
+  group_by(geo_tract, occ_group) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = occ_group, values_from = estimate)
 
 
 # Place person targets into list
@@ -443,8 +445,19 @@ ct_synth <- function(ct_fips, h_seed, p_seed, h_tgt, p_tgt){
 
 sf_pop <- bind_rows(lapply(unique(wrk_totals$GEOID), function(ct){
   puma_ct <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+  ct_hh_seed <- SF_hh_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-PUMA)
+  ct_p_seed <- SF_p_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-PUMA)
   
-  ct_h_tgt <- 
+  ct_hh_tgt <- lapply(SF_hh_tgt, function(i){
+    i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+  
+  ct_p_tgt <- lapply(SF_p_tgt, function(j){
+    j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+
+  ct_synth(ct, ct_hh_seed, ct_p_seed, ct_hh_tgt, ct_p_tgt)
+  
 }))
 ```
 
