@@ -44,12 +44,13 @@ tm_basemap(leaflet::providers$Esri.WorldImagery)+
 # 9. $150,000 to $199,999
 # 10. $200,000 or more
 
-temp <- tempfile()
-download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2018/5-Year/csv_hca.zip",temp)
+temp <- tempfile(fileext = ".zip")
+#download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2018/5-Year/csv_hca.zip",temp)
+system(paste0("curl https://www2.census.gov/programs-surveys/acs/data/pums/2018/5-Year/csv_hca.zip --output ", temp))
 PUMS_2018_h <- read_csv(unz(temp, "psam_h06.csv"))
 unlink(temp)
 
-h <- read_csv("csv_hca (1)/psam_h06.csv")
+#h <- read_csv("csv_hca (1)/psam_h06.csv")
 
 h_seed<- PUMS_2018_h %>% 
   filter(PUMA %in% c("07501", "07502", "07503", "07504", "07505", "07506", "07507"), NP!=0, !is.na(SERIALNO), !is.na(HINCP)) %>%
@@ -62,22 +63,23 @@ h_seed<- PUMS_2018_h %>%
 #============================ processing seed data ==============================
 # read in person data from PUMS 2014-2018 5 year survey
 temp <- tempfile()
-download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2018/5-Year/csv_pca.zip",temp)
+#download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2018/5-Year/csv_pca.zip",temp)
+system(paste0("curl https://www2.census.gov/programs-surveys/acs/data/pums/2018/5-Year/csv_pca.zip --output ", temp))
 PUMS_2018_p <- read_csv(unz(temp, "psam_p06.csv"))
 unlink(temp)
 
-p<-read_csv("csv_hca (1)/psam_p06.csv")
+#p<-read_csv("csv_hca (1)/psam_p06.csv")
 # for SF county only
 # PUMA list https://www.census.gov/geographies/reference-maps/2010/geo/2010-pumas/california.html
 PUMS_2018_sf <- PUMS_2018_p %>%
   filter(PUMA %in% c("07501", "07502", "07503", "07504", "07505", "07506", "07507"))
-nrow(PUMS_2018_sf)
-PUMS_2018_sf$Agegroup <- cut(PUMS_2018_sf$AGEP, breaks = c(-Inf, 4, 11, 18, 51, 70, Inf), right = FALSE)
-pop.prop <- PUMS_2018_sf %>%
-  group_by(Agegroup) %>%
-  summarize(prop = n()) %>%
-  mutate(prop = prop/sum(prop))
-pop.prop
+# nrow(PUMS_2018_sf)
+# PUMS_2018_sf$Agegroup <- cut(PUMS_2018_sf$AGEP, breaks = c(-Inf, 4, 11, 18, 51, 70, Inf), right = FALSE)
+# pop.prop <- PUMS_2018_sf %>%
+#   group_by(Agegroup) %>%
+#   summarize(prop = n()) %>%
+#   mutate(prop = prop/sum(prop))
+# pop.prop
 
 
 #### Make OCC dataset
@@ -110,13 +112,13 @@ for(i in 1:23){
   OCC.list$New_Code[OCC.list$Code >= cutoff_group[1] & OCC.list$Code <= cutoff_group[2]] <- i
 }
 
-sf_occp <- PUMS_2018_sf %>%
-  filter(! OCCP %in% c("9800", "9810", "9825", "9830")) %>%   # remove military
-  group_by(OCCP) %>%
-  summarise(num = n(), prop = num/nrow(PUMS_2018_sf)) %>%
-  left_join(OCC.list, by = c("OCCP" = "Code")) %>%
-  ungroup() %>%
-  mutate(new.code = ifelse(is.na(`New_Code`), "00", str_pad(`New_Code`, 2, pad = "0")))
+# sf_occp <- PUMS_2018_sf %>%
+#   filter(! OCCP %in% c("9800", "9810", "9825", "9830")) %>%   # remove military
+#   group_by(OCCP) %>%
+#   summarise(num = n(), prop = num/nrow(PUMS_2018_sf)) %>%
+#   left_join(OCC.list, by = c("OCCP" = "Code")) %>%
+#   ungroup() %>%
+#   mutate(new.code = ifelse(is.na(`New_Code`), "00", str_pad(`New_Code`, 2, pad = "0")))
 
 
 ### Race
@@ -157,7 +159,7 @@ p_seed <- PUMS_2018_sf %>%
 # See hierarchy of geography here https://api.census.gov/data/2018/acs/acs5/geography.html
 # See here for different table https://data.census.gov/cedsci/
 
-census_api_key("443aa1caca4e8860f0b3cdaa41b3ac3de6664725", install = TRUE, overwrite = TRUE)    # replace with your key, which can be applied from here https://api.census.gov/data/key_signup.html
+#census_api_key("443aa1caca4e8860f0b3cdaa41b3ac3de6664725", install = TRUE, overwrite = TRUE)    # replace with your key, which can be applied from here https://api.census.gov/data/key_signup.html
 #create variable search df from tidycensus
 acs_var18<-load_variables(2018, "acs5", cache=FALSE)
 acs_subject_var18<-load_variables(2018, "acs5/subject", cache=FALSE)
