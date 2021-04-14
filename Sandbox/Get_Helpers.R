@@ -96,6 +96,15 @@ acs_race_eth_lookup <- acs_vars %>%
   
 usethis::use_data(acs_race_eth_lookup, overwrite = T)
 
+# School grade lookup table -----------------
+acs_grade_lookup <- acs_vars %>% 
+  filter(grepl("B14007_", name)) %>% 
+  slice(-c(1,2)) %>% # remove aggregate totals
+  mutate(grade = c(paste0("0", c(1:16)), "bb")) %>%  # Match levels in pums data
+  dplyr::select(name, label,grade)
+  
+usethis::use_data(acs_grade_lookup, overwrite = T)
+
 
 # Household income lookup table ------------
 acs_vars_subject<-tidycensus::load_variables(2019, "acs5/subject", cache=FALSE)

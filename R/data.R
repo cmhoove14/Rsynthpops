@@ -70,6 +70,19 @@
 #' 
 "acs_race_eth_lookup"
 
+#' School grade lookup table
+#'
+#' Dataset to relate acs variables from B14007_ table (detailed school grade) to pums school grades
+#'
+#' @format A data frame with 18 rows and 3 variables:
+#' \describe{
+#'   \item{name}{acs variable name}
+#'   \item{label}{acs variable label}
+#'   \item{grade}{two-character grade classifier found in pums SCHG variable}
+#'   ...
+#' }
+#' 
+"acs_grade_lookup"
 
 
 #' Household income lookup table
