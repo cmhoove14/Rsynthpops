@@ -20,6 +20,9 @@ Depends:
     tidyverse,
     stringr,
     readxl,
+    parallel,
+    matrixStats,
+    patchwork,
     R (>= 2.10)
 LinkingTo: Rcpp, RcppEigen, RcppNumerical, RcppParallel
 Imports: 
