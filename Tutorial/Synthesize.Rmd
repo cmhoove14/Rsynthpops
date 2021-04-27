@@ -1,0 +1,100 @@
+---
+title: "Synthesize population"
+author: "Chris Hoover et al"
+date: "4/23/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+devtools::load_all()
+
+load(here::here("Tutorial/data/processed_data.Rdata"))
+```
+
+## Synthesize population  
+
+```{r synthesize, cache=TRUE}
+
+ct_synth <- function(ct_fips, h_seed, p_seed, h_tgt, p_tgt){
+  ct_ipu <- ipu(h_seed, h_tgt, p_seed, p_tgt, primary_id="SERIALNO")
+  ct_syn_h <- synthesize(ct_ipu$weight_tbl, primary_id="SERIALNO")
+  ct_syn_p <- left_join(ct_syn_h, p_seed, by="SERIALNO") %>%
+    rename(house_id=new_id) #%>% select(house_id, indiv_id, hhsize, hhincome, sex, age, occp, race)
+  
+  return(ct_syn_p)
+
+}
+
+# cts_synth_list <- lapply(synth_cts, function(ct){
+#   puma_ct    <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+#   ct_p_seed  <- SF_p_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-c(PUMA, weight))
+#   # Make sure all households have corresponding individuals in seed data
+#   p_ids <- ct_p_seed$SERIALNO
+#   ct_hh_seed <- SF_hh_seed %>% filter(PUMA == puma_ct & SERIALNO %in% p_ids) %>% dplyr::select(-c(PUMA, weight))
+# 
+#   ct_hh_tgt <- lapply(SF_hh_tgt, function(i){
+#     i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+#   })
+# 
+#   ct_p_tgt <- lapply(SF_p_tgt, function(j){
+#     j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+#   })
+# 
+#   cat(ct, "\n")
+# 
+#   ct_synth(ct_fips = ct,
+#            h_seed = ct_hh_seed,
+#            p_seed = ct_p_seed,
+#            h_tgt = ct_hh_tgt,
+#            p_tgt = ct_p_tgt) %>%
+#     mutate(GEOID = ct)
+# 
+# })
+
+
+# Run synthesis across census tracts in parallel
+clust <- makeCluster(detectCores()-2)
+clusterExport(clust, c("ct_synth", "synth_cts",
+                       "SF_hh_seed", "SF_p_seed",
+                       "SF_hh_tgt", "SF_p_tgt"))
+clusterEvalQ(clust, devtools::load_all())
+
+cts_synth_list <- parLapply(clust, synth_cts, function(ct){
+  puma_ct    <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+  ct_p_seed  <- SF_p_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-c(PUMA, weight))
+  # Make sure all households have corresponding individuals in seed data
+  p_ids <- ct_p_seed$SERIALNO
+  ct_hh_seed <- SF_hh_seed %>% filter(PUMA == puma_ct & SERIALNO %in% p_ids) %>% dplyr::select(-c(PUMA, weight))
+
+  ct_hh_tgt <- lapply(SF_hh_tgt, function(i){
+    i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+
+  ct_p_tgt <- lapply(SF_p_tgt, function(j){
+    j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+
+  ct_synth(ct, ct_hh_seed, ct_p_seed, ct_hh_tgt, ct_p_tgt) %>%
+    mutate(GEOID = ct)
+
+})
+
+stopCluster(clust)
+
+sf_pop <- bind_rows(cts_synth_list)
+
+# Add unique individual identifier
+sf_pop <- sf_pop %>% 
+  mutate(indiv_id=rownames(.),
+         house_id = paste0(GEOID, "_", house_id))
+
+head(sf_pop)
+```
+
+```{r save_synth_pop}
+saveRDS(sf_pop,
+        file = here::here("Tutorial/data/synth_pop.rds"))
+```
+

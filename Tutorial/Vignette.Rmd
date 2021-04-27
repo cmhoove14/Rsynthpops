@@ -1,0 +1,1051 @@
+---
+title: "Generate A Population"
+author: "Chris Hoover"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+
+devtools::load_all()
+```
+
+# TODOs:  
+* Add finer-grained occupations? see acs table B24114 and merge to pums occupations by name  
+* Add group quarters synthesis, see acs tables S2603_C03-C07 for group quarters populations or B26101  
+
+# Overview  
+
+# Population synthesis  
+## Get PUMS data  
+The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` uses functions from `tidycensus` to get PUMS data. `tidycensus` also ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. Below, we see the first few variables available for the 1-year 2018 PUMS data. 
+
+We'll generate data for San Francisco, CA as an example for this exercise.
+
+```{r SF_setup}
+state_use  = "CA"
+fips_use   = "06075" # San Francisco county fips code
+year_use   = 2019
+survey_use = "acs5"
+```
+
+```{r pums_vars_head}
+#census_api_key(my_key, install = TRUE) # Replace `my_key` with your census api key
+
+pums_vars <- pums_variables %>% 
+  filter(year == year_use, survey == survey_use) %>% 
+  # The distinct call shows one row per variable but can be removed to show all levels of all variables  
+  distinct(var_code, var_label, data_type, level)
+
+  head(pums_vars, n = 10)
+```
+
+The `get_pums()` function from `tidycensus` automatically retains the `SERIALNO`, `SPORDER`, `WGTP`, `PWGTP`, and `ST` variables for the state or states from which data is requested, but anything else you want to include should be identified from the `var_code` variable in `pums_variables` and passed in the `variables` argument to `get_pums()`. We'll build on the `tidycensus` [vignette on downloading and using PUMS data](https://walker-data.com/tidycensus/articles/pums-data.html) to build the person and household level target and seed data that will be used to generate the backbone of our synthetic population. **Note**: this might take a few minutes depending on the population size you're working with.  
+
+```{r get_data, message=FALSE, include = FALSE, cache=TRUE}
+pums_vars_get <- c(
+  "PUMA",   # PUMA region
+  "SEX",    # Sex assigned at birth of individual
+  "AGEP",   # Age of individual
+  "SCHG",   # Current grade level if attending school
+  "ADJINC", # Income adjustment to be applied to HINCP
+  "HINCP",  # Household income over past twelve months
+  "NP",     # Number of persons in household
+  "HHT",    # Household type (family, non family)
+  "OCCP",   # Current occupation if working
+  "HISP",   # Hispanic origin
+  "RAC1P"   # Racial group
+)
+
+CA_pums <- tidycensus::get_pums(
+    variables = pums_vars_get,
+    state     = state_use,
+    survey    = survey_use,
+    year      = year_use
+  )
+```
+
+Once data has been downloaded for the entire state, it may need to be further filtered to your target geography. This can be done by identifying the PUMAs (Public Use Microdata Areas) that fall within your target geography, here the county of San Francisco. Luckily, a similar FIPS naming convention applies for PUMAs and counties, so filtering by PUMAs that contain the three digit FIPS county code, 075 for San Francisco, will parse the full state into the target county. For sub-county level target geographies such as census tracts, `Rsynthpops` ships with a dataframe `cts_to_pumas` that contains a lookup table relating PUMAs to state, county, and census tract FIPs codes.
+
+```{r SF_pumas}
+SF_pums <- CA_pums %>% 
+  filter(grepl("075", PUMA))
+```
+
+## Generate population seeds  
+
+The next step is to generate the household and person seed dataframes. These "seeds" contain individual level characteristics of the target population that will be used in iterative proportional fitting along with target population characteristics to generate the population. To generate seeds, we need to incorporate our desired household and person characteristics and the survey weights to correct for over/under representation in the PUMS sample. We'll start with the household seed data, and the first step is to determine which of our chosen variables are at the household level
+
+```{r hh_vars}
+# Determine which variables are household level
+SF_vars <- colnames(SF_pums)
+hh_vars <- SF_vars[which(SF_vars %in% (pums_vars %>% filter(level == "housing") %>% pull(var_code)))]
+
+hh_vars
+```
+
+We know that the "WGTP" variable is used for weighting, so our only household level variables are income and household size (number of persons, `NP`). We'll first combine the household income and inflation adjustment variables into a single household income variable. We also want to avoid stratifying the population too much, else we'll end up with unstable proportions to generate our population, so we'll condense the household income variable into categories as well. We'll use fairly arbitrary cutoffs of <\$50k, \$50k-\$100k, and >\$100k, but you could also use e.g. local poverty rates to better inform this categorization for your specific area. In this case, you might also want to check the distribution of household sizes (NP variable) and consider adding an upper cutoff (e.g. group all households with >=7 individuals). Lastly, we'll get our proportions for the seed dataset. For now, we won't include anyone living in group quarters, so we'll remove anyone with the "GQ" tag in their serial number
+
+
+```{r hh_seed}
+SF_hh_seed <- SF_pums %>% 
+  # Ignore individuals in group quarters for now
+  filter(!grepl("GQ", SERIALNO)) %>% 
+  # Restrict to our household variables
+  dplyr::select(c("SERIALNO", "SPORDER", "WGTP", "PWGTP", "PUMA", all_of(hh_vars))) %>% 
+  # Create household income adjusted for inflation variable and then categorize
+  mutate(
+    HHINCADJ  = HINCP*as.numeric(ADJINC),
+    HHINC_CAT = as.factor(case_when(HHINCADJ < 50000 ~ 1,
+                                    HHINCADJ >= 50000 & HHINCADJ < 100000 ~ 2,
+                                    HHINCADJ >=100000 ~ 3)),
+    NP        = if_else(NP >= 7, 7, NP), # any households with >7 people grouped together to match acs
+    HHT       = if_else(HHT %in% c("1", "2", "3"), 1, 2)     # Family for 1,2,3 ; GQ/other/Non-family for b, 4-7
+    ) %>% 
+  # Only one observation per household
+  group_by(SERIALNO) %>% 
+  summarise(across(.cols = everything(),
+                   .fns = first)) %>% 
+  # Cleanup
+  dplyr::select(SERIALNO, PUMA, HHINC_CAT, HHT, NP, WGTP) %>% 
+  rename("hhincome" = HHINC_CAT,
+         "hhsize" = NP,
+         "hhtype" = HHT, 
+         "weight" = WGTP)
+
+
+
+head(SF_hh_seed)
+```
+
+Now we'll go through the same process to get the person seeds data frame. Similar to household income and size variables, any variables that are continuous, have many levels, or have levels with small frequencies will likely need to be condensed in order to produce stable weights for the iterative proportional fitting algorithm. Below we condense age into decadal increments, but also maintain the school grade variable, `SCHG`, in order to place school-aged children into classes.  
+
+```{r p_vars}
+# Determine which variables are person level as those leftover from household vars
+p_vars <- SF_vars[which(!SF_vars %in% hh_vars)]
+
+p_vars
+```
+
+```{r p_seed}
+
+SF_p_seed <- SF_pums %>% 
+  # Ignore individuals in group quarters for now
+  filter(!grepl("GQ", SERIALNO)) %>% 
+  # Restrict to our person variables
+  dplyr::select(unique(c("SERIALNO", "SPORDER", "WGTP", "PWGTP", "PUMA", all_of(p_vars)))) %>% 
+  mutate(
+    # Condense age into categories
+    age_cat  = cut(AGEP, breaks = c(0,10,20,30,40,50,60,70,80,Inf), labels = FALSE, right = FALSE, include.lowest = TRUE),
+    # Condense American Indian and Alaska Native categories to match acs reporting of aggregate totals
+    race = if_else(RAC1P %in% c("3", "4", "5"), "3", RAC1P),
+    # make hispanic category numeric
+    hispanic = if_else(HISP == "01", 0, 1)
+    ) %>% 
+  # Cleanup
+  dplyr::select(SERIALNO, PUMA, SCHG, SEX, OCCP, age_cat, race, hispanic, PWGTP) %>% 
+  rename("grade"      = SCHG,
+         "sex"        = SEX,
+         "occupation" = OCCP,
+         "weight"     = PWGTP) %>% 
+  # Merge with lookup table which relates acs and occp codes then add code 9 for unemployed/retired/in school
+  left_join(acs_occp_lookup %>% dplyr::select(Code, occ_group),
+            by = c("occupation" = "Code")) %>% 
+  mutate(occ_group = if_else(occupation == "0009", 99, occ_group)) %>% 
+  filter(occ_group != 55) # Leave out military for now due to lack of target data
+
+head(SF_p_seed)
+```
+
+## Generate population targets  
+Census data is reported in aggregate at the census block, census block group, census tract, county, and state levels. PUMS data is reported for individuals within PUMA areas that are somewhere between a census tract and a county in size and population. The target data to be fed into `ipu` thus provides a target for the synthetic population generator to replicate, while also maintaining correlations between variables found in the individual records of the seed datasets.
+
+The first step for target data is to download aggregate census data with characteristics matching the seed data. This is perhaps the most tedious exercise of the entire process as we need to find the variables in the aggregate census dataset that match the variables we've chose in our seed datasets, then match the levels of each variable from the seed data to the aggregate data. We can use the `load_variables()` function from `tidycensus` to get a full list of available variables from the same survey we use to get the PUMS data. Most variables can likely be found in the default dataset called from `load_variables`, but some may be found in the `survey/profile` or `survey/subject` datasets (where `survey` should be replaced by the data survey being used, e.g. "acs5"). A number of lookup tables that relate acs variable names to puma variables to aid matching acs to puma categories are shipped with `Rsynthpops` and their derivation can be found in `Analysis/Generate_Lookups`
+
+```{r acs_vars}
+acs_vars<-load_variables(year_use, survey_use, cache=FALSE)
+head(acs_vars)
+
+acs_vars_subject<-load_variables(year_use, paste0(survey_use, "/subject"), cache=FALSE)
+acs_vars_profile<-load_variables(year_use, paste0(survey_use, "/profile"), cache=FALSE)
+
+```
+
+```{r acs_get, message = FALSE, cache = TRUE}
+# Age by sex -------------
+acs_age_sex <- get_acs(
+  geography = "tract", 
+  table     = "B01001", 
+  year      = year_use, 
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# Race ---------------------
+acs_race <- get_acs(
+  geography = "tract", 
+  table     = "B03002", 
+  year      = year_use,  
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# School grade ----------------
+acs_grade <- get_acs(
+  geography = "tract", 
+  table     = "B14007", 
+  year      = year_use, 
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# household size -----------------------
+acs_hhsize_type<- get_acs(
+  geography = "tract",
+  variables = c(fam_2     ="B11016_003", 
+                fam_3     ="B11016_004", 
+                fam_4     ="B11016_005",
+                fam_5     ="B11016_006", 
+                fam_6     ="B11016_007", 
+                fam_7plus ="B11016_008",
+                non_1     ="B11016_010", 
+                non_2     ="B11016_011", 
+                non_3     ="B11016_012",
+                non_4     ="B11016_013", 
+                non_5     ="B11016_014", 
+                non_6     ="B11016_015",
+                non_7plus ="B11016_016"),
+  state     = state_use,
+  year      = year_use,
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# household income ---------------
+acs_hh_income <- get_acs(
+  geography = "tract", 
+  table     = "B19001", 
+  year      = year_use,  
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+# Occupation --------------
+acs_occup <- get_acs(
+  geography = "tract", 
+  table     = "S2401", 
+  year      = year_use, 
+  state     = state_use, 
+  survey    = survey_use
+) %>% 
+  mutate(county_fips = substr(GEOID,1,5))
+
+```
+
+
+```{r h_targets}
+# household size -----------------------
+acs_hhsize_tgt <- acs_hhsize_type %>%
+  filter(county_fips == fips_use) %>% 
+  mutate(hhsize = parse_number(variable)) %>% 
+  group_by(GEOID, hhsize) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = hhsize, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+
+# household type -----------------------
+acs_hhtype_tgt <- acs_hhsize_type %>%
+  filter(county_fips == fips_use) %>% 
+  mutate(hhtype = if_else(grepl("fam", variable), 1, 2)) %>% 
+  group_by(GEOID, hhtype) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = hhtype, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+         
+# household income ---------------
+acs_hhincome_tgt <- acs_hh_income %>%
+  filter(county_fips == fips_use) %>% 
+  left_join(acs_hhincome_lookup, by = c("variable" = "name")) %>% 
+  filter(!is.na(label)) %>% 
+  # match income groups to seed data
+  mutate(hhincome = as.factor(case_when(income_max < 50000 ~ 1,
+                                        income_min >= 50000 & income_max < 100000 ~2,
+                                        income_min >= 100000 ~3))) %>% 
+  group_by(GEOID, hhincome) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = hhincome, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+
+# Place household targets into list
+SF_hh_tgt          <- list()
+SF_hh_tgt$hhincome <- acs_hhincome_tgt
+SF_hh_tgt$hhtype   <- acs_hhtype_tgt
+SF_hh_tgt$hhsize   <- acs_hhsize_tgt
+```
+
+```{r p_targets}
+# Age -------------
+acs_age_tgt <- acs_age_sex %>%
+  filter(county_fips == fips_use) %>% 
+  # merge with acs_sex_by_age lookup table to get age categories and sex associated with each variable
+  left_join(acs_sex_by_age_lookup, by = c("variable" = "name")) %>% 
+  filter(!variable %in% c("B01001_001", "B01001_002","B01001_026")) %>%  # Remove total aggregate, aggregate male, aggregate female counts 
+  # match decile age groups to seed data
+  mutate(age_cat = case_when(age_max < 10 ~ 1,
+                             age_min >= 10 & age_max < 20 ~2,
+                             age_min >= 20 & age_max < 30 ~3,
+                             age_min >= 30 & age_max < 40 ~4,
+                             age_min >= 40 & age_max < 50 ~5,
+                             age_min >= 50 & age_max < 60 ~6,
+                             age_min >= 60 & age_max < 70 ~7,
+                             age_min >= 70 & age_max < 80 ~8,
+                             age_min >= 80 ~9)) %>% 
+  group_by(GEOID,age_cat) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = age_cat, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+
+
+# Sex ---------------------
+acs_sex_tgt <- acs_age_sex %>%
+  filter(county_fips == fips_use) %>% 
+  # merge with acs_sex_by_age lookup table to get age categories and sex associated with each variable
+  left_join(acs_sex_by_age, by = c("variable" = "name")) %>% 
+  filter(!variable %in% c("B01001_001", "B01001_002","B01001_026")) %>%  # Remove total aggregate, aggregate male, aggregate female counts 
+  group_by(GEOID,sex_num) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = sex_num, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+
+# Race ---------------------
+acs_race_tgt <- acs_race %>%
+  filter(county_fips == fips_use) %>% 
+  # merge with lookup table to get race categories and binary ethnicity associated with each variable
+  left_join(acs_race_eth_lookup, by = c("variable" = "name")) %>% 
+  filter(!variable %in% c("B03002_001", "B03002_002", "B03002_012")) %>% # Remove aggregate totals variables
+  # recode race variable to match pums seed data
+  mutate(race = case_when(grepl("White", race) ~ 1,
+                          grepl("Black", race) ~ 2,
+                          grepl("American Indian", race) ~ 3,
+                          grepl("Asian", race) ~ 6,
+                          grepl("Native Hawaiian", race) ~ 7,
+                          grepl("Some other", race) ~ 8,
+                          grepl("Two or more", race) ~ 9)) %>% 
+  group_by(GEOID,race) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = race, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+
+# Ethnicity ---------------------
+acs_eth_tgt <- acs_race %>%
+  filter(county_fips == fips_use) %>% 
+  # merge with lookup table to get race categories and binary ethnicity associated with each variable
+  left_join(acs_race_eth_lookup, by = c("variable" = "name")) %>% 
+  filter(!variable %in% c("B03002_001", "B03002_002", "B03002_012")) %>% # Remove aggregate totals variables
+  group_by(GEOID,hispanic) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = hispanic, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+
+# School grade ----------------
+acs_grade_tgt <- acs_grade %>% 
+  filter(county_fips == fips_use) %>% 
+  left_join(acs_grade_lookup, by = c("variable" = "name")) %>% 
+  filter(!is.na(grade)) %>%  # filter out aggregate totals
+  group_by(GEOID, grade) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = grade, values_from = estimate) %>% 
+  rename("geo_tract" = GEOID)
+  
+# Occupation --------------
+# Filter out higher level aggregations of occupational classes to only get lowest level classes
+lowest_acs_occp_vars <- acs_occp_lookup %>% 
+  filter(str_length(Code2) < 10, !is.na(acs_var)) %>% 
+  pull(acs_var)
+
+acs_occup_tgt_init <- acs_occup %>%
+  filter(county_fips == fips_use,
+         variable %in% lowest_acs_occp_vars) %>% 
+  # Merge with lookup table in order to match with seed data
+  left_join(acs_occp_lookup, by = c("variable" = "acs_var")) %>% 
+  group_by(GEOID, occ_group) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  rename("geo_tract" = GEOID)
+
+# No unemployed counts in acs data, so need to determine number of people not working by subtracting working population from total population
+pop_totals <- acs_sex_tgt %>% mutate(estimate = `1`+`2`) # Total population
+wrk_totals <- acs_occup_tgt_init %>% group_by(geo_tract) %>% summarise(estimate = sum(estimate)) #Total working population
+
+nwrk_pop <- pop_totals %>% left_join(wrk_totals, by = c("geo_tract")) %>% #Total non-working population
+  mutate(occ_group = 99,
+         estimate = estimate.x - estimate.y) %>% 
+  dplyr::select(geo_tract, occ_group, estimate)
+
+#Check to make sure population classified into working groups is equal to total population
+sum(acs_occup_tgt_init %>% group_by(geo_tract) %>% summarise(tpop = sum(estimate)) %>% left_join(pop_totals) %>% mutate(errors = tpop-estimate) %>% pull(errors)) == 0
+
+# Pivot wider for final
+
+acs_occup_tgt <- rbind(acs_occup_tgt_init, nwrk_pop) %>% 
+  group_by(geo_tract, occ_group) %>% 
+  summarise(estimate = sum(estimate)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = occ_group, values_from = estimate)
+
+
+# Place person targets into list
+SF_p_tgt             <- list()
+SF_p_tgt$grade       <- acs_grade_tgt
+SF_p_tgt$sex         <- acs_sex_tgt
+SF_p_tgt$occ_group   <- acs_occup_tgt
+SF_p_tgt$age_cat     <- acs_age_tgt
+SF_p_tgt$race        <- acs_race_tgt
+SF_p_tgt$hispanic    <- acs_eth_tgt
+
+```
+
+## Synthesize population  
+
+```{r synthesize, cache=TRUE}
+
+ct_synth <- function(ct_fips, h_seed, p_seed, h_tgt, p_tgt){
+  ct_ipu <- ipu(h_seed, h_tgt, p_seed, p_tgt, primary_id="SERIALNO")
+  ct_syn_h <- synthesize(ct_ipu$weight_tbl, primary_id="SERIALNO")
+  ct_syn_p <- left_join(ct_syn_h, p_seed, by="SERIALNO") %>%
+    rename(house_id=new_id) #%>% select(house_id, indiv_id, hhsize, hhincome, sex, age, occp, race)
+  
+  return(ct_syn_p)
+
+}
+
+synth_cts <- unique(wrk_totals$geo_tract[which(wrk_totals$estimate > 0)])
+
+cts_synth_list <- lapply(synth_cts, function(ct){
+  puma_ct    <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+  ct_p_seed  <- SF_p_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-c(PUMA, weight))
+  # Make sure all households have corresponding individuals in seed data
+  p_ids <- ct_p_seed$SERIALNO
+  ct_hh_seed <- SF_hh_seed %>% filter(PUMA == puma_ct & SERIALNO %in% p_ids) %>% dplyr::select(-c(PUMA, weight))
+
+  ct_hh_tgt <- lapply(SF_hh_tgt, function(i){
+    i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+
+  ct_p_tgt <- lapply(SF_p_tgt, function(j){
+    j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+
+  cat(ct, "\n")
+
+  ct_synth(ct_fips = ct,
+           h_seed = ct_hh_seed,
+           p_seed = ct_p_seed,
+           h_tgt = ct_hh_tgt,
+           p_tgt = ct_p_tgt) %>%
+    mutate(GEOID = ct)
+
+})
+
+
+# Run synthesis across census tracts in parallel
+# clust <- makeCluster(detectCores()-2)
+# clusterExport(clust, c("ct_synth", "synth_cts",
+#                        "SF_hh_seed", "SF_p_seed",
+#                        "SF_hh_tgt", "SF_p_tgt"))
+# clusterEvalQ(clust, devtools::load_all())
+# 
+# cts_synth_list <- parLapply(clust, synth_cts, function(ct){
+#   puma_ct    <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+#   ct_p_seed  <- SF_p_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-c(PUMA, weight))
+#   # Make sure all households have corresponding individuals in seed data
+#   p_ids <- ct_p_seed$SERIALNO
+#   ct_hh_seed <- SF_hh_seed %>% filter(PUMA == puma_ct & SERIALNO %in% p_ids) %>% dplyr::select(-c(PUMA, weight))
+# 
+#   ct_hh_tgt <- lapply(SF_hh_tgt, function(i){
+#     i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+#   })
+# 
+#   ct_p_tgt <- lapply(SF_p_tgt, function(j){
+#     j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+#   })
+# 
+#   ct_synth(ct, ct_hh_seed, ct_p_seed, ct_hh_tgt, ct_p_tgt) %>%
+#     mutate(GEOID = ct)
+# 
+# })
+# 
+# stopCluster(clust)
+
+sf_pop <- bind_rows(cts_synth_list)
+
+# Add unique individual identifier
+sf_pop <- sf_pop %>% 
+  mutate(indiv_id=rownames(.),
+         house_id = paste0(GEOID, "_", house_id))
+
+head(sf_pop)
+```
+
+```{r debug, include = FALSE, echo=FALSE, eval=FALSE}
+ct = "06075020401"
+# -------------------
+  puma_ct    <- cts_to_pumas %>% filter(CTFP == ct) %>% pull(PUMA5CE)
+  ct_hh_seed <- SF_hh_seed %>% filter(PUMA == puma_ct) %>% dplyr::select(-c(PUMA, weight))
+  # Make sure all households have corresponding individuals in seed data
+    hh_ids <- ct_hh_seed$SERIALNO
+  ct_p_seed  <- SF_p_seed %>% filter(PUMA == puma_ct & hh_ids %in% SERIALNO) %>% dplyr::select(-c(PUMA, weight))
+  
+  ct_hh_tgt <- lapply(SF_hh_tgt, function(i){
+    i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+  
+  ct_p_tgt <- lapply(SF_p_tgt, function(j){
+    j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+  })
+
+  cat(ct, "\n")
+  
+  ct_synth(ct_fips = ct, 
+           h_seed = ct_hh_seed, 
+           p_seed = ct_p_seed, 
+           h_tgt = ct_hh_tgt, 
+           p_tgt = ct_p_tgt) %>% 
+    mutate(GEOID = ct)
+
+  
+# -----------------  
+  ct_ipu <- ipu(ct_hh_seed, ct_hh_tgt, ct_p_seed, ct_p_tgt, primary_id="SERIALNO")
+  
+  
+# -----------------
+  primary_seed = ct_hh_seed; primary_targets = ct_hh_tgt; secondary_seed = ct_p_seed; 
+          secondary_targets = ct_p_tgt; primary_id = "SERIALNO"; secondary_importance = 1; 
+          relative_gap = 0.01; max_iterations = 100; absolute_diff = 10; 
+          weight_floor = 1e-05; verbose = FALSE; max_ratio = 10000; 
+          min_ratio = 1e-04
+  
+  if (xor(!is.null(secondary_seed), !is.null(secondary_targets))) {
+    stop("You provided either secondary_seed or secondary_targets, but not both.")
+  }
+  if (secondary_importance > 1 | secondary_importance < 0) {
+    stop("`secondary_importance` argument must be between 0 and 1")
+  }
+  if (!is.null(secondary_seed)) {
+    result <- ipfr:::check_tables(primary_seed, primary_targets, 
+                           primary_id = primary_id, secondary_seed, secondary_targets)
+  } else {
+    result <- ipfr:::check_tables(primary_seed, primary_targets, 
+                           primary_id = primary_id)
+  }
+  primary_seed <- result[[1]]
+  primary_targets <- result[[2]]
+  secondary_seed <- result[[3]]
+  secondary_targets <- result[[4]]
+  primary_targets <- ipfr:::scale_targets(primary_targets, verbose)
+  if (!is.null(secondary_seed)) {
+    secondary_targets <- ipfr:::scale_targets(secondary_targets, 
+                                       verbose)
+  }
+  if (secondary_importance != 1 & !is.null(secondary_seed)) {
+    if (verbose) {
+      message("Balancing secondary targets to primary")
+    }
+    secondary_targets_mod <- balance_secondary_targets(primary_targets, 
+                                                       primary_seed, secondary_targets, secondary_seed, 
+                                                       secondary_importance, primary_id)
+  } else {
+    secondary_targets_mod <- secondary_targets
+  }
+  geo_equiv <- primary_seed %>% dplyr::select(dplyr::starts_with("geo_"), 
+                                              primary_id, "weight")
+  marginal_columns <- names(primary_targets)
+  primary_seed_mod <- ipfr:::process_seed_table(primary_seed, primary_id, 
+                                         marginal_columns)
+  if (!is.null(secondary_seed)) {
+    marginal_columns <- names(secondary_targets_mod)
+    secondary_seed_mod <- ipfr:::process_seed_table(secondary_seed, 
+                                             primary_id, marginal_columns) %>% dplyr::group_by(!!as.name(primary_id)) %>% 
+      dplyr::summarize_all(.funs = sum)
+    seed <- primary_seed_mod %>% dplyr::left_join(secondary_seed_mod, 
+                                                  by = primary_id)
+  } else {
+    seed <- primary_seed_mod
+  }
+  seed <- seed %>% dplyr::left_join(geo_equiv, by = primary_id)
+  geo_pos <- grep("geo_", colnames(seed))
+  id_pos <- grep(primary_id, colnames(seed))
+  weight_pos <- grep("weight", colnames(seed))
+  seed_attribute_cols <- colnames(seed)[-c(geo_pos, id_pos, 
+                                           weight_pos)]
+  if (!is.null(secondary_seed)) {
+    targets <- c(primary_targets, secondary_targets_mod)
+  } else {
+    targets <- primary_targets
+  }
+  for (name in names(targets)) {
+    temp <- targets[[name]] %>% tidyr::gather(key = "key", 
+                                              value = "target", -dplyr::starts_with("geo_")) %>% 
+      dplyr::mutate(key = paste0(!!name, ".", key, ".target")) %>% 
+      tidyr::spread(key = key, value = target)
+    pos <- grep("geo_", colnames(temp))
+    geo_colname <- colnames(temp)[pos]
+    seed <- seed %>% dplyr::left_join(temp, by = geo_colname)
+  }
+  pos <- grep("geo_", colnames(targets[[1]]))
+  geo_colname <- colnames(targets[[1]])[pos]
+  recs_by_geo <- seed %>% dplyr::group_by(!!as.name(geo_colname)) %>% 
+    dplyr::summarize(count = n())
+  weight_scale <- targets[[1]] %>% tidyr::gather(key = category, 
+                                                 value = total, -!!as.name(geo_colname)) %>% dplyr::group_by(!!as.name(geo_colname)) %>% 
+    dplyr::summarize(total = sum(total)) %>% dplyr::left_join(recs_by_geo, 
+                                                              by = geo_colname) %>% dplyr::mutate(avg_weight = total/count, 
+                                                                                                  min_weight = (!!min_ratio) * avg_weight, max_weight = (!!max_ratio) * 
+                                                                                                    avg_weight)
+  seed <- seed %>% dplyr::left_join(weight_scale, by = geo_colname)
+  iter <- 1
+  converged <- FALSE
+  
+  View(seed)
+  
+  
+  
+  
+  while (!converged & iter <= max_iterations) {
+    for (seed_attribute in seed_attribute_cols) {
+      target_tbl_name <- strsplit(seed_attribute, ".", 
+                                  fixed = TRUE)[[1]][1]
+      target_name <- paste0(seed_attribute, ".", "target")
+      target_tbl <- targets[[target_tbl_name]]
+      pos <- grep("geo_", colnames(target_tbl))
+      geo_colname <- colnames(target_tbl)[pos]
+      seed2 <- seed %>% dplyr::mutate(geo = !!as.name(geo_colname), 
+                                     attr = !!as.name(seed_attribute), 
+                                     target = !!as.name(target_name)) %>% 
+        dplyr::group_by(geo) %>% dplyr::mutate(total_weight = sum(attr * 
+                                                                    weight), factor = ifelse(attr > 0, target/total_weight, 
+                                                                                             1), weight = weight * factor, weight = pmax(weight, 
+                                                                                                                                         weight_floor), weight = ifelse(attr > 0 & target > 
+                                                                                                                                                                          0, pmax(min_weight, weight), weight), weight = ifelse(attr > 
+                                                                                                                                                                                                                                  0 & target > 0, pmin(max_weight, weight), weight)) %>% 
+        dplyr::ungroup()# %>% dplyr::select(-geo, -attr, -target, -factor)
+      
+      cat(seed_attribute, " ", mean(seed$weight), "\n")
+    }
+    saved_diff_tbl <- NULL
+    pct_diff <- 0
+    for (seed_attribute in seed_attribute_cols) {
+      target_tbl_name <- strsplit(seed_attribute, ".", 
+                                  fixed = TRUE)[[1]][1]
+      target_name <- paste0(seed_attribute, ".", "target")
+      target_tbl <- targets[[target_tbl_name]]
+      pos <- grep("geo_", colnames(target_tbl))
+      geo_colname <- colnames(target_tbl)[pos]
+      diff_tbl <- seed %>% dplyr::filter((!!as.name(seed_attribute)) > 
+                                           0) %>% dplyr::select(geo = !!geo_colname, primary_id, 
+                                                                attr = !!seed_attribute, weight, target = !!target_name) %>% 
+        dplyr::group_by(geo) %>% dplyr::mutate(total_weight = sum(attr * 
+                                                                    weight), diff = total_weight - target, abs_diff = abs(diff), 
+                                               pct_diff = diff/(target + 1e-07)) %>% dplyr::filter(abs_diff > 
+                                                                                                     absolute_diff) %>% dplyr::slice(1) %>% dplyr::ungroup()
+      if (nrow(diff_tbl) > 0) {
+        if (max(abs(diff_tbl$pct_diff)) > pct_diff) {
+          pct_diff <- max(abs(diff_tbl$pct_diff))
+          saved_diff_tbl <- diff_tbl
+          saved_category <- seed_attribute
+          saved_geo <- geo_colname
+        }
+      }
+    }
+    if (iter > 1) {
+      rmse <- mlr::measureRMSE(prev_weights, seed$weight)
+      pct_rmse <- rmse/mean(prev_weights) * 100
+      converged <- ifelse(pct_rmse <= relative_gap, TRUE, 
+                          FALSE)
+      if (verbose) {
+        cat("\r Finished iteration ", iter, ". %RMSE = ", 
+            pct_rmse)
+      }
+    }
+    prev_weights <- seed$weight
+    iter <- iter + 1
+  }
+  if (verbose) {
+    message(ifelse(converged, "\nIPU converged", "\nIPU did not converge"))
+    if (is.null(saved_diff_tbl)) {
+      message("All targets matched within the absolute_diff of ", 
+              absolute_diff)
+    }
+    else {
+      message("Worst marginal stats:")
+      position <- which(abs(saved_diff_tbl$pct_diff) == 
+                          pct_diff)[1]
+      message("Category: ", saved_category)
+      message(saved_geo, ": ", saved_diff_tbl$geo[position])
+      message("Worst % Diff: ", round(saved_diff_tbl$pct_diff[position] * 
+                                        100, 2), "%")
+      message("Difference: ", round(saved_diff_tbl$diff[position], 
+                                    2))
+    }
+    utils::flush.console()
+  }
+  primary_seed$weight <- seed$weight
+  primary_seed$avg_weight <- seed$avg_weight
+  primary_seed$weight_factor <- primary_seed$weight/primary_seed$avg_weight
+  primary_seed <- primary_seed %>% mutate(weight = ifelse(avg_weight == 
+                                                            0, 0, weight), weight_factor = ifelse(avg_weight == 0, 
+                                                                                                  0, weight_factor))
+  result <- list()
+  result$weight_tbl <- primary_seed
+  result$weight_tbl$geo_all <- NULL
+  result$weight_dist <- ggplot2::ggplot(data = primary_seed, 
+                                        ggplot2::aes(primary_seed$weight_factor)) + ggplot2::geom_histogram(bins = 10, 
+                                                                                                            fill = "darkblue", color = "gray") + ggplot2::labs(x = "Weight Ratio = Weight / Average Weight", 
+                                                                                                                                                               y = "Count of Seed Records")
+  primary_comp <- compare_results(primary_seed, primary_targets)
+  result$primary_comp <- primary_comp
+  if (!is.null(secondary_seed)) {
+    pos <- grep("geo_", colnames(primary_seed))
+    geo_cols <- colnames(primary_seed)[pos]
+    seed <- secondary_seed %>% dplyr::left_join(primary_seed %>% 
+                                                  dplyr::select(dplyr::one_of(geo_cols), primary_id, 
+                                                                weight), by = primary_id)
+    secondary_comp <- compare_results(seed, secondary_targets)
+    result$secondary_comp <- secondary_comp
+  }
+```
+
+## Validation  
+The goal of the synthetic population generation via iterative proportional updating is to match both aggregate totals of the desired characteristics within the target geographic areas--census tracts in this case--and correlations between variables as found in the individual responses that comprise the seed data. 
+
+```{r global_val}
+# HHincome
+SF_hhincome_obs <- colSums(acs_hhincome_tgt[,-1])
+SF_hhincome_gen <- sf_pop[!duplicated(sf_pop$house_id),] %>% group_by(hhincome) %>% summarise(n = n())
+
+SF_hhincome_comp <- tibble(vrbl = "hhincome",
+                           lvl = as.factor(SF_hhincome_gen$hhincome),
+                           obs = SF_hhincome_obs,
+                           gen = SF_hhincome_gen$n)
+
+SF_hhincome_comp_plot <- SF_hhincome_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = c(0.2, 0.9)) +
+    scale_x_discrete(labels = c("<$50k", "$50k-$100k", ">$100k")) +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    labs(x = "Household Type",
+         y = "Count",
+         fill = "")
+
+# HHtype
+SF_hhtype_obs <- colSums(acs_hhtype_tgt[,-1])
+SF_hhtype_gen <- sf_pop[!duplicated(sf_pop$house_id),] %>% group_by(hhtype) %>% summarise(n = n())
+
+SF_hhtype_comp <- tibble(vrbl = "hhtype",
+                         lvl = as.factor(SF_hhtype_gen$hhtype),
+                         obs = SF_hhtype_obs,
+                         gen = SF_hhtype_gen$n)
+
+SF_hhtype_comp_plot <- SF_hhtype_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_x_discrete(labels = c("Family", "non-Family")) +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    labs(x = "Household Type",
+         y = "Count",
+         fill = "")
+
+
+# HHsize
+SF_hhsize_obs <- colSums(acs_hhsize_tgt[,-1])
+SF_hhsize_gen <- sf_pop[!duplicated(sf_pop$house_id),] %>% group_by(hhsize) %>% summarise(n = n())
+
+SF_hhsize_comp <- tibble(vrbl = "hhsize",
+                         lvl = as.factor(SF_hhsize_gen$hhsize),
+                         obs = SF_hhsize_obs,
+                         gen = SF_hhsize_gen$n)
+
+SF_hhsize_comp_plot <- SF_hhsize_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_x_discrete(labels = c(as.character(c(1:6)), "7+")) +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    labs(x = "Household Size",
+         y = "Count",
+         fill = "")
+
+
+# Grade
+SF_grade_obs <- colSums(acs_grade_tgt[,-1])
+SF_grade_gen <- sf_pop %>% group_by(grade) %>% summarise(n = n())
+
+SF_grade_comp <- tibble(vrbl = "grade",
+                         lvl = as.factor(SF_grade_gen$grade),
+                         obs = SF_grade_obs,
+                         gen = SF_grade_gen$n)
+
+
+SF_grade_comp_plot <- SF_grade_comp %>% 
+  filter(lvl != "bb") %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    labs(x = "Grade",
+         y = "Count",
+         fill = "")
+
+
+# Sex
+SF_sex_obs <- colSums(acs_sex_tgt[,-1])
+SF_sex_gen <- sf_pop %>% group_by(sex) %>% summarise(n = n())
+
+SF_sex_comp <- tibble(vrbl = "sex",
+                      lvl = as.factor(SF_sex_gen$sex),
+                      obs = SF_sex_obs,
+                      gen = SF_sex_gen$n)
+
+SF_sex_comp_plot <- SF_sex_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_x_discrete(labels = c("Male", "Female")) +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    labs(x = "Sex",
+         y = "Count",
+         fill = "")
+
+
+# Occupational group
+SF_occ_obs <- colSums(acs_occup_tgt[,-1])
+SF_occ_gen <- sf_pop %>% group_by(occ_group) %>% summarise(n = n())
+
+SF_occ_comp <- tibble(vrbl = "occ",
+                      lvl = as.factor(SF_occ_gen$occ_group),
+                      obs = SF_occ_obs,
+                      gen = SF_occ_gen$n)
+
+SF_occ_comp_plot <- SF_occ_comp %>% 
+  filter(lvl != "99") %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    annotate(geom = "text", 15,70000, label = "* Unemployed not shown") +
+    labs(x = "Occupation Category",
+         y = "Count",
+         fill = "")
+
+
+# Age Category
+SF_age_obs <- colSums(acs_age_tgt[,-1])
+SF_age_gen <- sf_pop %>% group_by(age_cat) %>% summarise(n = n())
+
+SF_age_comp <- tibble(vrbl = "age",
+                      lvl = as.factor(SF_age_gen$age_cat),
+                      obs = SF_age_obs,
+                      gen = SF_age_gen$n)
+
+SF_age_comp_plot <- SF_age_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    scale_x_discrete(labels = c("0-9", "10-19", "20-29",
+                                "30-39", "40-49", "50-59", 
+                                "60-69", "70-79", "80+")) +
+    labs(x = "Age Category",
+         y = "Count",
+         fill = "")
+
+
+# Race
+SF_race_obs <- colSums(acs_race_tgt[,-1])
+SF_race_gen <- sf_pop %>% group_by(race) %>% summarise(n = n())
+
+SF_race_comp <- tibble(vrbl = "race",
+                       lvl = as.factor(SF_race_gen$race),
+                       obs = SF_race_obs,
+                       gen = SF_race_gen$n)
+
+SF_race_comp_plot <- SF_race_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    scale_x_discrete(labels = c("White", "Black", "Am. Ind\nAK nat.",
+                                "Asian", "HI/PI", "Other", "2+")) +
+    labs(x = "Race",
+         y = "Count",
+         fill = "")
+
+
+# Hispanic ethnicity
+SF_eth_obs <- colSums(acs_eth_tgt[,-1])
+SF_eth_gen <- sf_pop %>% group_by(hispanic) %>% summarise(n = n())
+
+SF_eth_comp <- tibble(vrbl = "eth",
+                      lvl = as.factor(SF_eth_gen$hispanic),
+                      obs = SF_eth_obs,
+                      gen = SF_eth_gen$n)
+
+SF_eth_comp_plot <- SF_eth_comp %>% 
+  pivot_longer(cols = c("gen", "obs"),
+               names_to = "Obs_Gen",
+               values_to = "Total") %>% 
+  ggplot(aes(x = lvl, y = Total, fill = Obs_Gen)) +
+    geom_col(position = "dodge") +
+    theme_classic() +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("#6768b2", "#64a3cd")) +
+    labs(x = "Hispanic Ethnicity",
+         y = "Count",
+         fill = "")
+
+# All together
+SF_gen_obs_comp <- bind_rows(
+  SF_hhincome_comp,
+  SF_hhtype_comp,
+  SF_hhsize_comp,
+  SF_grade_comp,
+  SF_sex_comp,
+  SF_occ_comp,
+  SF_age_comp,
+  SF_race_comp,
+  SF_eth_comp
+) %>% 
+  mutate(prop_diff = abs(obs - gen)/obs)
+
+
+(SF_hhincome_comp_plot | SF_hhtype_comp_plot | SF_hhsize_comp_plot) / (SF_age_comp_plot | SF_sex_comp_plot | SF_grade_comp_plot) / (SF_occ_comp_plot | SF_race_comp_plot | SF_eth_comp_plot)
+
+ggsave(here::here("Plots/SF_Overall_Validation.png"),
+       height = 8, width = 12, units = "in")
+```
+
+
+```{r aggregate_validation, eval=FALSE}
+n_vars <- length(SF_hh_tgt) + length(SF_p_tgt)
+n_cts  <- length(synth_cts)
+
+val_df_tgt <- data.frame("ct" = rep(synth_cts, times = n_vars),
+                         "var" = rep(c(names(h_tgt), names(p_tgt)), each = n_cts),
+                         "mse" = NA)
+
+mses <- apply(val_df_tgt, 1, FUN = function(i){
+  ct   = i[1]
+  vrbl = i[2]
+  
+  if(vrbl %in% names(h_tgt)){
+    
+    obs <- lapply(SF_hh_tgt, function(i){
+      i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+    })[[vrbl]] %>% 
+       pivot_longer(cols = everything(), names_to = vrbl, values_to = "n")
+    
+    # One obs per household
+    sf_ct <- sf_pop %>% filter(GEOID == ct)
+    sf_ct_hhs <- sf_ct[!duplicated(sf_ct$house_id),]
+
+    gen <- sf_ct_hhs %>% 
+      group_by(!!as.name(vrbl)) %>% 
+      count()
+    
+    out <- obs %>% 
+      left_join(gen, by = vrbl, suffix = c("_obs", "_gen")) %>% 
+      mutate(prop_diff = abs(n_obs - n_gen)/n_obs)
+    
+  } else if(vrbl %in% names(p_tgt)){
+    
+    obs <- lapply(SF_p_tgt, function(j){
+      j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+    })[[vrbl]] %>% 
+       pivot_longer(cols = everything(), names_to = vrbl, values_to = "n")
+    
+    gen <- sf_pop %>% 
+      filter(GEOID == ct) %>% 
+      group_by(!!as.name(vrbl)) %>% 
+      count()
+    
+    out <- obs %>% 
+      left_join(gen, by = vrbl, suffix = c("_obs", "_gen")) %>% 
+      mutate(prop_diff = abs(n_obs - n_gen)/n_obs)
+
+
+  } else {
+    
+    stop("Variable has no match in target data")
+    
+  }
+  
+  
+})
+
+
+for(i in 1:nrow(val_df_tgt)){
+  for(j in 1:n_vars){
+    
+  }
+}
+
+
+
+validate_var <- function(synth_pop, tgt, var){
+  
+}
+
+sf_pop_agg <- sf_pop %>% 
+  group_by(GEOID) %>% 
+  summarise()
+```
+
+
+## Adding additional network structure: Schools and Workplaces  
