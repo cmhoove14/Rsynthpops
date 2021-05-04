@@ -1,0 +1,51 @@
+---
+title: "`Rsynthpops` Midas Tutorial"
+date: "5/10/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background  
+We'll assume a working knowledge of R, particularly how to read and manipulate data. Our goal is to describe the basic functioning of the package, how to add characteristics to your population that are not already supported, and how to validate your population once it's created.    
+
+## Setup: PLEASE COMPLETE THESE STEPS PRIOR TO THE TUTORIAL ON MAY 10  
+* Install the package and any necessary prereqs by running `devtools::install_github("cmhoove14/Rsynthpops")`  
+* If you don't have one already, get a US census api key at https://api.census.gov/data/key_signup.html. To store your api key, run `tidycensus::census_api_key(your_key, install = TRUE)` replacing `your_key` with the key you obtained from the url above.   
+* Think about a place from which you want to generate a synthetic population. It could be a county or state where you are currently conducting some modeling work, the county you grew up in, a state you find interesting, or somewhere entirely random! If you choose a state, have that state's two character state abbreviation handy. If it's a county, have the county's 5-digit Federal Information Processing Standard (FIPS) code handy. These are easy to find via a web search with the county's name and "fips code".  
+
+## Main commands  
+* `rsp_get_` commands to download raw PUMS and ACS data  
+* `rsp_process_` commands to convert raw PUMS and ACS data into household/group quarters and person level seed and target data  
+* `rsp_synth_` commands to synthesize your population from your target and seed datasets  
+
+## Key steps  
+
+### Getting input data  
+```{r inputs}
+state_use  = "TN"
+fips_use   = "047031" # Coffee county fips code
+year_use   = 2019
+survey_use = "acs5"
+```
+
+```{r get_data}
+gq_dat <- rsp_
+
+```
+
+
+### Processing data  
+
+### Synthesizing population  
+
+### Validating population  
+
+## Adding new characteristics  
+* Inspect ACS and PUMS variables for data pertaining to your desire characteristics  
+* Determine how to match ACS and PUMS variables  
+* Process into target and seed characteristics  
+* Synthesize with new characteristic  
+* Validate  
