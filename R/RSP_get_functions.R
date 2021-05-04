@@ -30,7 +30,9 @@ rsp_get_gq <- function(STATES, LEVEL){
   
   state_dats <- lapply(1:length(STATES), function(s){
     tmp <- tempfile()
-    download.file(state_urls[s], tmp)
+    download.file(url = state_urls[s], 
+                  destfile = tmp,
+                  method = "curl")
     # Geography guide file
     dat1 <- read.table(unz(tmp, paste0(tolower(STATES[order(STATES)][s]), "geo2010.ur1")),
                        sep = "\n",
@@ -87,6 +89,9 @@ rsp_get_gq <- function(STATES, LEVEL){
     return(dat_fin)
   })
   
+  names(state_dats) <- STATES[order[STATES]]
+  
+  return(state_dats)
 }
 
 

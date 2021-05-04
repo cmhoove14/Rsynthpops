@@ -6,6 +6,9 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+#library(Rsynthpops)
+devtools::load_all()
 ```
 
 ## Background  
@@ -17,13 +20,15 @@ We'll assume a working knowledge of R, particularly how to read and manipulate d
 * Think about a place from which you want to generate a synthetic population. It could be a county or state where you are currently conducting some modeling work, the county you grew up in, a state you find interesting, or somewhere entirely random! If you choose a state, have that state's two character state abbreviation handy. If it's a county, have the county's 5-digit Federal Information Processing Standard (FIPS) code handy. These are easy to find via a web search with the county's name and "fips code".  
 
 ## Main commands  
-* `rsp_get_` commands to download raw PUMS and ACS data  
-* `rsp_process_` commands to convert raw PUMS and ACS data into household/group quarters and person level seed and target data  
+* `rsp_get_` commands to download raw PUMS, ACS, and census data  
+* `rsp_process_` commands to convert raw data into household/group quarters and person level seed and target data  
 * `rsp_synth_` commands to synthesize your population from your target and seed datasets  
 
 ## Key steps  
 
 ### Getting input data  
+The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` builds on functions from `tidycensus` to get PUMS and ACS data and adds an additional function to get data on group quarters directly from the census ftp site. `tidycensus` also ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. Below, we see the first few variables available for the 5-year 2019 PUMS data. 
+
 ```{r inputs}
 state_use  = "TN"
 fips_use   = "047031" # Coffee county fips code
@@ -31,9 +36,52 @@ year_use   = 2019
 survey_use = "acs5"
 ```
 
-```{r get_data}
-gq_dat <- rsp_
+```{r pums_vars_head}
+pums_vars_all <- pums_variables %>% 
+  filter(year == year_use, survey == survey_use)
 
+pums_vars <- pums_vars_all %>% 
+  distinct(var_code, var_label, data_type, level)
+
+  head(pums_vars, n = 10)
+```
+
+```{r get_data}
+# Variables we want to include in the final synthetic population
+get_vars <- c(
+  "Sex",
+  "Age",
+  "Race",
+  "Ethnicity",
+  "Occupation",
+  "Grade",
+  "School_Type",
+  "HH_Income",
+  "HH_Type",
+  "HH_Size"
+)
+
+# GEt group quarters data
+gq_dat <- rsp_get_gq(state_use,
+                     "Tract")
+
+# Get PUMS data
+pums_dat <- rsp_get_pums(
+  VARS   = get_vars,
+  SURVEY = "acs5",
+  STATES = state_use,
+  YEAR   = year_use
+)
+
+# Get ACS data
+
+acs_dat <- rsp_get_acs(
+  VARS   = get_vars,
+  SURVEY = "acs5",
+  STATES = state_use,
+  LEVEL  = "Tract",
+  YEAR   = year_use
+)
 ```
 
 
@@ -44,6 +92,27 @@ gq_dat <- rsp_
 ### Validating population  
 
 ## Adding new characteristics  
+```{r pums_vars_head}
+#census_api_key(my_key, install = TRUE) # Replace `my_key` with your census api key
+
+pums_vars_all <- pums_variables %>% 
+  filter(year == year_use, survey == survey_use)
+
+pums_vars <- pums_vars_all %>% 
+  distinct(var_code, var_label, data_type, level)
+
+  head(pums_vars, n = 10)
+```
+
+```{r acs_vars}
+acs_vars<-load_variables(year_use, survey_use, cache=FALSE)
+head(acs_vars)
+
+acs_vars_subject<-load_variables(year_use, paste0(survey_use, "/subject"), cache=FALSE)
+acs_vars_profile<-load_variables(year_use, paste0(survey_use, "/profile"), cache=FALSE)
+
+```
+
 * Inspect ACS and PUMS variables for data pertaining to your desire characteristics  
 * Determine how to match ACS and PUMS variables  
 * Process into target and seed characteristics  
