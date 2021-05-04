@@ -1,3 +1,14 @@
+#' Variables of interest relation to PUMS variable names and acs data table codes 
+#'
+#' `pums_to_acs <- readRDS(here::here(data/pums_to_acs.rds))`
+#'
+#' @format A list of variables where each list contains a PUMS code or codes and an ACS data table code or codes which is past to `tidycensus` functions for downloading data from user input attributes. See `R/rsp_get_data()` and `Analysis/ACS_PUMS_List.R`  
+#' 
+"pums_to_acs"
+
+
+
+
 #' Puma areas relation to FIPS codes
 #'
 #' Dataset to relate FIPS areas/codes to PUMAS data
