@@ -89,7 +89,29 @@ rsp_get_gq <- function(STATES, LEVEL){
       colnames(dat6_parse) <- c("LOGRECNO", P04300_cols)
       
     dat_fin <- dat1_fin %>% 
-      left_join(dat6_parse, by = "LOGRECNO")   
+      left_join(dat6_parse, by = "LOGRECNO") %>% 
+      pivot_longer(cols = all_of(P04300_cols),
+                   names_to = "variable",
+                   values_to = "estimate") %>% 
+      filter(variable %in% c("P0430004", # Male under 18 institutionalized 
+                             "P0430009", # Male under 18 non-institutionalized   
+                             "P0430014", # Male 18-64 institutionalized   
+                             "P0430019", # Male 18-64 non-institutionalized   
+                             "P0430024", # Male over 65 institutionalized   
+                             "P0430029", # Male over 65 non-institutionalized   
+                             "P0430035", # Female under 18 institutionalized 
+                             "P0430040", # Female under 18 non-institutionalized   
+                             "P0430045", # Female 18-64 institutionalized   
+                             "P0430050", # Female 18-64 non-institutionalized   
+                             "P0430055", # Female over 65 institutionalized   
+                             "P0430060")) %>%  # Female over 65 non-institutionalized  
+      mutate(
+        GQ_Sex  = if_else(substr(variable, 8, 8) %in% c("4","9"), 1, 2),
+        GQ_Age  = case_when(substr(variable, 7, 8) %in% c("04","09", "35", "40") ~ 1,
+                            substr(variable, 7, 8) %in% c("14","19", "45", "50") ~ 2,
+                            substr(variable, 7, 8) %in% c("24","29", "55", "60") ~ 3),
+        GQ_Type = if_else(substr(variable, 8, 8) %in% c("4","5"), "Inst", "NonInst")
+      )
       
     return(dat_fin)
   })
@@ -143,7 +165,7 @@ rsp_get_pums <- function(VARS, SURVEY = "acs5", STATES, YEAR){
 
 
 
-#' @title Get pums data
+#' @title Get acs data
 #' 
 #' @description Get ACS data for desired variables
 #' 
