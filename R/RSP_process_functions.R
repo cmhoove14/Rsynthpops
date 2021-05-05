@@ -405,13 +405,79 @@ rsp_process_p_seed <- function(pums_dat, pumas, p_vars, p_age_breaks = c(0,10,20
 
 
 
-
-rsp_process_gq_tgt <- function(){
+#' @title Process group quarters target data from acs supplement file 1
+#' 
+#' @description 
+#' 
+#' @param gq_dat data frame returned as element of list from `rsp_get_gq()` with processed data from census table P43
+#' @param fips_use fips code to restrict acs data by. 
+#' 
+#' @details 
+#' 
+#' @return list containing named elements that match columns names of group quarters variables in seed data. in each list is a data frames where columns match categories of the variables in seed data.
+#' @export
+#' 
+rsp_process_gq_tgt <- function(gq_dat, fips_use){
+  gq_tgt <- list()
   
+  # Group quarters sex totals --------------
+  gq_sex_tgt <- gq_dat %>% 
+    filter(substr(GEOID, 1, nchar(fips_use)) == fips_use) %>% 
+    group_by(GEOID, GQ_Sex) %>% 
+    summarise(estimate = sum(estimate)) %>% 
+    ungroup() %>% 
+    pivot_wider(names_from = GQ_Sex, values_from = estimate)
+  
+  gq_tgt$GQ_Sex <- gq_sex_tgt
+  
+  # Group quarters age totals --------------
+  gq_age_tgt <- gq_dat %>% 
+    filter(substr(GEOID, 1, nchar(fips_use)) == fips_use) %>% 
+    group_by(GEOID, GQ_Age) %>% 
+    summarise(estimate = sum(estimate)) %>% 
+    ungroup() %>% 
+    pivot_wider(names_from = GQ_Age, values_from = estimate)
+  
+  gq_tgt$GQ_Age <- gq_age_tgt
+  
+# Group quarters type totals --------------
+  gq_type_tgt <- gq_dat %>% 
+    filter(substr(GEOID, 1, nchar(fips_use)) == fips_use) %>% 
+    group_by(GEOID, GQ_Type) %>% 
+    summarise(estimate = sum(estimate)) %>% 
+    ungroup() %>% 
+    pivot_wider(names_from = GQ_Type, values_from = estimate)
+  
+  gq_tgt$GQ_Type <- gq_type_tgt
+  
+  # Return target list --------------
+  return(gq_tgt)
 }
 
 
-
-rsp_process_gq_seed <- function(){
+#' @title Process group quarters seed data from pums
+#' 
+#' @description Processes pums data to extract all those in group quarters and generate variables to match information in census table P43 that serves as target data
+#' 
+#' @param pums_dat pums dataset, e.g. from `rsp_get_pums()`
+#' @param pumas puma areas to include 
+#' 
+#' @details 
+#' 
+#' @return data frame containing person pums records for individuals in group quarters 
+#' @export
+#' 
+rsp_process_gq_seed <- function(pums_dat, pumas){
+  gq_seed <- pums_dat %>% 
+    filter(PUMA %in% pumas) %>% 
+    filter(grepl("GQ", SERIALNO)) %>% 
+    # Assume those in school or with job are not institutionalized, all others are
+    mutate(GQ_Type = if_else(SCHG != "bb" | !OCCP %in% c("0009", "9920"), "NonInst", "Inst"),
+           GQ_Age = cut(AGEP,
+                        breaks = c(0,18,64,150),
+                        right = FALSE,
+                        labels = FALSE)) %>% 
+    rename("GQ_Sex" = SEX)
   
+  return(gq_seed)
 }
