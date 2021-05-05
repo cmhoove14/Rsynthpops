@@ -122,7 +122,7 @@ acs_hhincome_lookup <- acs_vars %>%
   mutate(income_min = map_dbl(label, extract_number_money_min),
          income_min = if_else(grepl("Less than", label), 0, income_min),
          income_max = map_dbl(label, extract_number_money_max),
-         income_max = if_else(grepl("or more",label), 1e7, income_max)) %>% 
+         income_max = if_else(grepl("or more",label), 1e6, income_max)) %>% 
   filter(is.finite(income_min) & income_min != 12)
 
 usethis::use_data(acs_hhincome_lookup, overwrite = T)
