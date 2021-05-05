@@ -11,6 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 devtools::load_all()
 ```
 
+## **Check back on May 9th for the final version of this document**   
+
 ## Background  
 We'll assume a working knowledge of R, particularly how to read and manipulate data. Our goal is to describe the basic functioning of the package, how to add characteristics to your population that are not already supported, and how to validate your population once it's created.    
 
@@ -27,28 +29,23 @@ We'll assume a working knowledge of R, particularly how to read and manipulate d
 ## Key steps  
 
 ### Getting input data  
-The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` builds on functions from `tidycensus` to get PUMS and ACS data and adds an additional function to get data on group quarters directly from the census ftp site. `tidycensus` also ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. Below, we see the first few variables available for the 5-year 2019 PUMS data. 
+The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` builds on functions from `tidycensus` to get PUMS and ACS data and adds an additional function to get data on group quarters directly from the census ftp site. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. 
 
 ```{r inputs}
 state_use  = "TN"
-fips_use   = "047031" # Coffee county fips code
+fips_use   = "47031" # Coffee county fips code
 year_use   = 2019
 survey_use = "acs5"
+pumas_use  = cts_to_pumas %>% 
+  filter(STCNTYFP == fips_use) %>% 
+  pull(PUMA5CE) %>% 
+  unique()
 ```
 
-```{r pums_vars_head}
-pums_vars_all <- pums_variables %>% 
-  filter(year == year_use, survey == survey_use)
-
-pums_vars <- pums_vars_all %>% 
-  distinct(var_code, var_label, data_type, level)
-
-  head(pums_vars, n = 10)
-```
 
 ```{r get_data}
 # Variables we want to include in the final synthetic population
-get_vars <- c(
+characteristics <- c(
   "Sex",
   "Age",
   "Race",
@@ -61,22 +58,23 @@ get_vars <- c(
   "HH_Size"
 )
 
-# GEt group quarters data
-gq_dat <- rsp_get_gq(state_use,
-                     "Tract")
+# Get group quarters data
+gq_dat <- rsp_get_gq(
+  STATE = state_use,
+  LEVEL = "Tract"
+)
 
 # Get PUMS data
 pums_dat <- rsp_get_pums(
-  VARS   = get_vars,
+  VARS   = characteristics,
   SURVEY = "acs5",
   STATES = state_use,
   YEAR   = year_use
 )
 
 # Get ACS data
-
 acs_dat <- rsp_get_acs(
-  VARS   = get_vars,
+  VARS   = characteristics,
   SURVEY = "acs5",
   STATES = state_use,
   LEVEL  = "Tract",
@@ -84,19 +82,74 @@ acs_dat <- rsp_get_acs(
 )
 ```
 
-
 ### Processing data  
+Now that all the data is downloaded, it needs to be processed to feed into the synthesizer, in this case, the `ipu()` function from the `ipfr` package. Other synthesizers are being considered and tested, but iterative proportional updating is currently the canonical method. `ipu()` requires "seed" and "target" data for every agent characteristics, where the seeds come from individual pums records and targets come from aggregated acs/census records.  
+
+```{r process_setup}
+all_pums_hh_vars <- pums_variables %>% 
+  filter(year == year_use,
+         survey == survey_use,
+         level == "housing") %>% 
+  pull(var_code) %>% 
+  unique()
+
+# Determine which variables are household level
+pums_vars <- colnames(pums_dat)
+hh_vars <- pums_vars[which(pums_vars %in% all_pums_hh_vars)]
+
+# Determine which variables are person level as those leftover from household vars
+p_vars <- pums_vars[which(!pums_vars %in% all_pums_hh_vars)]
+
+```
+
+```{r process_gqs}
+gq_seed <- pums_dat %>% 
+    #filter(PUMA %in% pumas) %>% 
+    filter(grepl("GQ", SERIALNO)) %>% 
+    mutate(GQ_Type = case_when(SCHG != "bb" ~ 1))
+
+```
+
+```{r process_ps_hhs}
+hh_seed <- rsp_process_hh_seed(
+  pums_dat         = pums_dat, 
+  pumas            = pumas_use, 
+  hh_vars          = hh_vars, 
+  hh_income_breaks = c(-100,50,100,100000)*1000
+)
+
+hh_tgt <- rsp_process_hh_tgt(
+  acs_hh_dat       = acs_dat,
+  chars            = characteristics,
+  fips_use         = fips_use,
+  hh_income_breaks = c(-100,50,100,100000)*1000
+)
+
+p_seed <- rsp_process_p_seed(
+  pums_dat     = pums_dat, 
+  pumas        = pumas_use, 
+  p_vars       = p_vars, 
+  p_age_breaks = c(0,10,20,30,40,50,60,70,80,150)
+)
+
+p_tgt <- rsp_process_p_tgt(
+  acs_p_dat       = acs_dat,
+  chars            = characteristics,
+  fips_use         = fips_use,
+  p_age_breaks = c(0,10,20,30,40,50,60,70,80,150)
+)
+```
 
 ### Synthesizing population  
 
 ### Validating population  
 
 ## Adding new characteristics  
-```{r pums_vars_head}
-#census_api_key(my_key, install = TRUE) # Replace `my_key` with your census api key
+`tidycensus` ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Below, we see the first few variables available for the 5-year 2019 PUMS data. 
 
+```{r pums_vars_head}
 pums_vars_all <- pums_variables %>% 
-  filter(year == year_use, survey == survey_use)
+  filter(year == 2018, survey == "acs5")
 
 pums_vars <- pums_vars_all %>% 
   distinct(var_code, var_label, data_type, level)
@@ -104,8 +157,10 @@ pums_vars <- pums_vars_all %>%
   head(pums_vars, n = 10)
 ```
 
+`tidycensus` also has a function `load_variables()` to view aggregate variables reported in the acs.
+
 ```{r acs_vars}
-acs_vars<-load_variables(year_use, survey_use, cache=FALSE)
+acs_vars<-tidycensus::load_variables(2019, "acs5", cache=FALSE)
 head(acs_vars)
 
 acs_vars_subject<-load_variables(year_use, paste0(survey_use, "/subject"), cache=FALSE)
