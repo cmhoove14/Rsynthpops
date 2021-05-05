@@ -22,11 +22,13 @@ rsp_get_gq <- function(STATES, LEVEL){
     stop("LEVEL not recognized")
   }
   
+  STATES <- STATES[order(STATES)]
+  
   state_names <- state.name[which(state.abb %in% STATES)]
   
   state_urls <- paste0("https://www2.census.gov/census_2010/04-Summary_File_1/Urban_Rural_Update/",
                        state_names[order(state_names)], "/",
-                       tolower(STATES[order(STATES)]), "2010.ur1.zip")
+                       tolower(STATES), "2010.ur1.zip")
   
   state_dats <- lapply(1:length(STATES), function(s){
     tmp <- tempfile()
@@ -34,11 +36,11 @@ rsp_get_gq <- function(STATES, LEVEL){
                   destfile = tmp,
                   method = "curl")
     # Geography guide file
-    dat1 <- read.table(unz(tmp, paste0(tolower(STATES[order(STATES)][s]), "geo2010.ur1")),
+    dat1 <- read.table(unz(tmp, paste0(tolower(STATES[s]), "geo2010.ur1")),
                        sep = "\n",
                        header = FALSE)
     # Data file 6 with Gq data
-    dat6 <- read.table(unz(tmp, paste0(tolower(STATES[order(STATES)][s]), "000062010.ur1")),
+    dat6 <- read.table(unz(tmp, paste0(tolower(STATES[s]), "000062010.ur1")),
                        sep = ",")
     unlink(tmp)  
       
@@ -49,6 +51,7 @@ rsp_get_gq <- function(STATES, LEVEL){
         ST_fips   = substr(V1, 28, 29),
         Cnty_fips = substr(V1, 30, 32),
         Ct_fips   = substr(V1, 55, 60),
+        GEOID     = paste0(ST_fips, Cnty_fips, Ct_fips),
         PUMA      = substr(V1, 478, 482)
       )
     
@@ -56,19 +59,19 @@ rsp_get_gq <- function(STATES, LEVEL){
       
       dat1_fin <- dat1_parse %>% 
         filter(SUMLEV == "140") %>% 
-        dplyr::select(c("LOGRECNO", "ST_fips", "Cnty_fips", "Ct_fips"))
+        dplyr::select(c("LOGRECNO", "GEOID", "ST_fips", "Cnty_fips", "Ct_fips"))
       
     } else if(LEVEL == "County"){
       
       dat1_fin <- dat1_parse %>% 
         filter(SUMLEV == "050") %>% 
-        dplyr::select(c("LOGRECNO", "ST_fips", "Cnty_fips", "Ct_fips"))
+        dplyr::select(c("LOGRECNO", "GEOID", "ST_fips", "Cnty_fips", "Ct_fips"))
       
     } else if(LEVEL == "State"){
       
       dat1_fin <- dat1_parse %>% 
         filter(SUMLEV == "040") %>% 
-        dplyr::select(c("LOGRECNO", "ST_fips", "Cnty_fips", "Ct_fips"))
+        dplyr::select(c("LOGRECNO", "GEOID", "ST_fips", "Cnty_fips", "Ct_fips"))
       
     } else {
       stop("LEVEL not recognized")
@@ -80,7 +83,9 @@ rsp_get_gq <- function(STATES, LEVEL){
       dplyr::select(c(5, 179:241))
     
       P04300_nums <- c(1:63)
-      P04300_cols <- paste0("P04300", if_else(nchar(P04300_nums) == 1, paste0("0", P04300_nums), as.character(P04300_nums)))
+      P04300_cols <- paste0("P04300", if_else(nchar(P04300_nums) == 1, 
+                                              paste0("0", P04300_nums), 
+                                              as.character(P04300_nums)))
       colnames(dat6_parse) <- c("LOGRECNO", P04300_cols)
       
     dat_fin <- dat1_fin %>% 
@@ -89,7 +94,7 @@ rsp_get_gq <- function(STATES, LEVEL){
     return(dat_fin)
   })
   
-  names(state_dats) <- STATES[order[STATES]]
+  names(state_dats) <- STATES
   
   return(state_dats)
 }
@@ -120,6 +125,8 @@ rsp_get_pums <- function(VARS, SURVEY = "acs5", STATES, YEAR){
   pums_vars <- unlist(lapply(VARS, function(var){
     pums_to_acs[[var]][["PUMS"]]
   }))
+  
+  pums_vars <- c("PUMA", pums_vars)
   
   pums_dat <- tidycensus::get_pums(
     variables = pums_vars,
@@ -182,8 +189,7 @@ rsp_get_acs <- function(VARS, SURVEY = "acs5", STATES, LEVEL, YEAR){
       year      = YEAR, 
       state     = STATES, 
       survey    = SURVEY
-    ) %>% 
-      mutate(county_fips = substr(GEOID,1,5))
+    )
   })
   
   names(acs_dat) <- acs_names_fin
