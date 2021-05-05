@@ -2,7 +2,7 @@
 % Please edit documentation in R/RSP_get_functions.R
 \name{rsp_get_acs}
 \alias{rsp_get_acs}
-\title{Get pums data}
+\title{Get acs data}
 \usage{
 rsp_get_acs(VARS, SURVEY = "acs5", STATES, LEVEL, YEAR)
 }
