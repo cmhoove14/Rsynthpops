@@ -69,6 +69,20 @@
 "acs_sex_by_age_lookup"
 
 
+#' Household size and type lookup table
+#'
+#' Dataset to relate acs variables from B11016 tables (household size and type) household size and type variables in PUMS
+#'
+#' @format A data frame with 13 rows and 3 variables:
+#' \describe{
+#'   \item{name}{acs variable name}
+#'   \item{hh_size}{number of persons living in household}
+#' }
+#' 
+"acs_hhsize_type_lookup"
+
+
+
 #' Race and ethnicity lookup table
 #'
 #' Dataset to relate acs variables from B03002 tables (race and ethnicity totals) to race and ethnicity categories

@@ -73,6 +73,20 @@ acs_sex_by_age_lookup <- acs_vars %>%
 
 usethis::use_data(acs_sex_by_age_lookup, overwrite = T)
 
+
+# Household size and type lookup table ---------------
+acs_hhsize_type_lookup <- acs_vars %>% 
+  filter(grepl("B11016", name)) %>%
+  separate(label, into = paste("level", 1:4, sep = ""), sep = "!!") %>% 
+  filter(!is.na(level4)) %>% # Removes summary variables
+  mutate(
+    hh_size = parse_number(level4),
+    hh_type = if_else(grepl("Nonfamily", level3), 2, 1)
+  ) %>% 
+  dplyr::select(name, hh_size, hh_type)
+  
+usethis::use_data(acs_hhsize_type_lookup, overwrite = T)
+
 # Race ethnicity lookup table -------------
 acs_race_eth_lookup <- acs_vars %>% 
   filter(grepl("B03002", name)) %>% 
