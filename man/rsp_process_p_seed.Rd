@@ -8,7 +8,7 @@ rsp_process_p_seed(
   pums_dat,
   pumas,
   p_vars,
-  p_age_breaks = c(0, 10, 20, 30, 40, 50, 60, 70, 80, Inf)
+  p_age_breaks = c(0, 10, 20, 30, 40, 50, 60, 70, 80, 150)
 )
 }
 \arguments{

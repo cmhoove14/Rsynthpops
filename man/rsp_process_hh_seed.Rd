@@ -8,7 +8,7 @@ rsp_process_hh_seed(
   pums_dat,
   pumas,
   hh_vars,
-  hh_income_breaks = c(-100, 50, 100, Inf) * 1000
+  hh_income_breaks = c(-100, 50, 100, 10000) * 1000
 )
 }
 \arguments{

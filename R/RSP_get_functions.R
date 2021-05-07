@@ -51,8 +51,7 @@ rsp_get_gq <- function(STATES, LEVEL){
         ST_fips   = substr(V1, 28, 29),
         Cnty_fips = substr(V1, 30, 32),
         Ct_fips   = substr(V1, 55, 60),
-        GEOID     = paste0(ST_fips, Cnty_fips, Ct_fips),
-        PUMA      = substr(V1, 478, 482)
+        GEOID     = paste0(ST_fips, Cnty_fips, Ct_fips)
       )
     
     if(LEVEL == "Tract"){
