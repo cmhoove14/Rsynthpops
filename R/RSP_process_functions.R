@@ -53,7 +53,7 @@ rsp_process_hh_tgt <- function(acs_hh_dat, chars, fips_use, hh_income_breaks = c
   
   # household income ---------------
   if("HH_Income" %in% chars){
-    acs_hhincome_tgt_init <- acs_hh_dat[["HH_Income"]] %>%
+    acs_hhincome_tgt <- acs_hh_dat[["HH_Income"]] %>%
       filter(substr(GEOID, 1, nchar(fips_use)) == fips_use) %>% 
       left_join(acs_hhincome_lookup, by = c("variable" = "name")) %>% 
       filter(!is.na(label)) %>% 
@@ -90,7 +90,7 @@ rsp_process_hh_tgt <- function(acs_hh_dat, chars, fips_use, hh_income_breaks = c
 #' @export
 #' 
 
-rsp_process_hh_seed <- function(pums_dat, pumas, hh_vars, hh_income_breaks = c(-100,50,100,Inf)*1000){
+rsp_process_hh_seed <- function(pums_dat, pumas, hh_vars, hh_income_breaks = c(-100,50,100,10000)*1000){
   hh_seed <- pums_dat %>% 
     filter(PUMA %in% pumas) %>% 
     # Ignore individuals in group quarters as they are synthesized seperately
@@ -328,7 +328,7 @@ rsp_process_p_tgt <- function(acs_p_dat, chars, fips_use, p_age_breaks = c(0,10,
 #' @return data frame containing person-level pums records with all household level characteristics of interest 
 #' @export
 #' 
-rsp_process_p_seed <- function(pums_dat, pumas, p_vars, p_age_breaks = c(0,10,20,30,40,50,60,70,80,Inf)){
+rsp_process_p_seed <- function(pums_dat, pumas, p_vars, p_age_breaks = c(0,10,20,30,40,50,60,70,80,150)){
   p_seed <- pums_dat %>% 
     filter(PUMA %in% pumas) %>% 
     # Ignore individuals in group quarters who will be added separately
@@ -480,4 +480,138 @@ rsp_process_gq_seed <- function(pums_dat, pumas){
     rename("GQ_Sex" = SEX)
   
   return(gq_seed)
+}
+
+
+#' @title Process group quarters synthetic population to get aggregate totals
+#' 
+#' @description Used to correct person-level targets for group quarters population prior to synthesis. Used in `rsp_hhp_synth()` to correct marginal person totals (target populations) for group quarters population
+#' 
+#' @param gq_pop Synthesized group quarters population, e.g. from `rsp_gq_synth()`
+#' @param chars person-level characteristics to be synthesized. Will be used to aggregate and summarize data in `gq_pop`
+#' @param fips_use fips code corresponding to target area to synthesize group quarters population
+#' @param p_age_breaks vector of breaks at which to divide age categories, defaults to deciles
+#' 
+#' @details 
+#' 
+#' @return list with names as in chars with marginal totals of each characteristic represented in gq population. 
+#' @export
+#' 
+rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20,30,40,50,60,70,80,150)){
+  
+  gq_pop_sums <- list()
+  
+  gq_pop_fips <- gq_pop %>% 
+    mutate(GEOID_use = substr(GEOID, 1, nchar(fips_use))) %>% 
+    filter(GEOID_use == fips_use)
+  
+  if(nrow(gq_pop_fips) > 0){
+    if("Age" %in% chars){
+      gq_pop_age <- gq_pop_fips %>% 
+        mutate(
+          # Condense age into categories
+          Age = as.factor(cut(AGEP, breaks = p_age_breaks, 
+                              labels = FALSE, right = FALSE, include.lowest = TRUE))
+        ) %>% 
+        dplyr::select(-AGEP) %>% 
+        group_by(GEOID_use, Age) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = Age, values_from = estimate)
+      
+      gq_pop_sums$Age <- gq_pop_age
+    }
+    
+    if("Race" %in% chars){
+      gq_pop_race <- gq_pop_fips %>% 
+        mutate(
+          # Condense American Indian and Alaska Native categories to match acs reporting of aggregate totals
+          Race = if_else(RAC1P %in% c("3", "4", "5"), "3", RAC1P)
+        )%>% 
+        dplyr::select(-RAC1P) %>% 
+        group_by(GEOID_use, Race) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = Race, values_from = estimate)
+      
+      gq_pop_sums$Race <- gq_pop_race
+    } 
+    
+    if("Ethnicity" %in% chars){
+      gq_pop_eth <- gq_pop_fips %>% 
+        mutate(
+          # make hispanic category numeric
+          Hispanic = if_else(HISP == "01", 0, 1)
+        )%>% 
+        dplyr::select(-HISP) %>% 
+        group_by(GEOID_use, Hispanic) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = Hispanic, values_from = estimate)
+      
+      gq_pop_sums$Ethnicity <- gq_pop_eth
+    }
+    
+    if("School_Type" %in% chars){
+      gq_pop_scltype <- gq_pop_fips %>% 
+        mutate(
+          # More informative school type codes
+          School_Type = case_when(SCH == "b" ~ "non",
+                                  SCH == "1" ~ "non",
+                                  SCH == "2" ~ "pub",
+                                  SCH == "3" ~ "pvt")
+        )%>% 
+        dplyr::select(-SCH) %>% 
+        group_by(GEOID_use, School_Type) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = School_Type, values_from = estimate)
+      
+      gq_pop_sums$School_Type <- gq_pop_scltype
+    }
+    
+    if("Grade" %in% chars){
+      gq_pop_grade <- gq_pop_fips %>% 
+        rename("Grade" = SCHG) %>% 
+        group_by(GEOID_use, Grade) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = Grade, values_from = estimate)
+      
+      gq_pop_sums$Grade <- gq_pop_grade
+    }
+    
+    if("Sex" %in% chars){
+      gq_pop_sex <- gq_pop_fips %>% 
+        rename("Sex" = GQ_Sex) %>% 
+        group_by(GEOID_use, Sex) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = Sex, values_from = estimate)
+      
+      gq_pop_sums$Sex <- gq_pop_sex
+    }
+    
+    if("Occupation" %in% chars){
+      gq_pop_occp <- gq_pop_fips %>% 
+        rename("Occupation" = OCCP) %>% 
+        # Merge with lookup table which relates acs and occp codes then add code 9 for unemployed/retired/in school
+        left_join(acs_occp_lookup %>% dplyr::select(Code, occ_group),
+                  by = c("Occupation" = "Code")) %>% 
+        mutate(occ_group = if_else(Occupation == "0009", 99, occ_group)) %>% 
+        filter(occ_group != 55) %>% 
+        group_by(GEOID_use, occ_group) %>% 
+        summarise(estimate = n()) %>% 
+        ungroup() %>% 
+        pivot_wider(names_from = occ_group, values_from = estimate)
+      
+      gq_pop_sums$Occupation <- gq_pop_occp
+    }
+    
+  } else {
+    gq_pop_sums <- NULL
+  }
+  
+  return(gq_pop_sums)
+  
 }
