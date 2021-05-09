@@ -89,7 +89,7 @@ rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NUL
     j %>% 
       mutate(GEOID_use = substr(GEOID, 1, nchar(fips_use))) %>% 
       filter(GEOID_use == fips_use) %>% 
-      dplyr::select(-c(GEOID, GEOID_use))
+      dplyr::select(-GEOID)
   })
   
   if(!is.null(gq_pop)){
@@ -99,30 +99,46 @@ rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NUL
     
     if(!is.null(gq_sums)){
       
-    hh_tgt <- lapply(person_chars, function(i){
-      tgt_gq_merge <- hh_tgt[[i]] %>% 
-        pivot_longer(all_of(colnames(.)[-1]),
+    fips_p_tgt <- lapply(person_chars, function(i){
+      tgt_gq_merge <- fips_p_tgt[[i]] %>% 
+        pivot_longer(all_of(colnames(.)[-ncol(.)]), # Pivot longer except GEOID_use column which is last column
                      names_to = "Var",
                      values_to = "Val") %>% 
         left_join(gq_sums[[i]] %>% 
-                    pivot_longer(all_of(colnames(.)[-1]),
+                    pivot_longer(all_of(colnames(.)[-1]), # Pivot longer except GEOID_use column which is first column
                                  names_to = "Var",
                                  values_to = "Val"), by = c("GEOID_use", "Var"),
                   suffix = c("_tgt", "_gq")) %>% 
-        mutate(Val_Crctd = Val_tgt - Val_gq) %>% 
-        dplyr::select(GEOID_use, Var, Val_Crctd) %>% 
+        mutate(Val_gq = replace_na(Val_gq, 0),
+               Val_Crctd = Val_tgt - Val_gq) %>% 
+        dplyr::select(Var, Val_Crctd) %>% 
         pivot_wider(names_from = Var, values_from = Val_Crctd)
       })
+    
+    names(fips_p_tgt) <- person_chars
+    
+    } else {
+      fips_p_tgt <- lapply(fips_p_tgt, function(df){
+        df %>% dplyr::select(-GEOID_use)
+      })
     }
+    
+  } else {
+    fips_p_tgt <- lapply(fips_p_tgt, function(df){
+      df %>% dplyr::select(-GEOID_use)
+    })
   }
   
-  
-  fips_ipu <- ipu(fips_hh_seed, fips_hh_tgt, fips_p_seed, fips_p_tgt, primary_id="SERIALNO")
-  fips_syn_h <- synthesize(fips_ipu$weight_tbl, primary_id="SERIALNO")
-  fips_syn_p <- left_join(fips_syn_h, p_seed, by="SERIALNO") %>%
-    mutate(GEOID = fips_use,
-           p_id  = row_number(),
-           u_id  = paste(GEOID, new_id, p_id, sep = "_"))
+  if(nrow(fips_p_seed)>0){
+    fips_ipu <- ipu(fips_hh_seed, fips_hh_tgt, fips_p_seed, fips_p_tgt, primary_id="SERIALNO")
+    fips_syn_h <- synthesize(fips_ipu$weight_tbl, primary_id="SERIALNO")
+    fips_syn_p <- left_join(fips_syn_h, p_seed, by="SERIALNO") %>%
+      mutate(GEOID = fips_use,
+             p_id  = row_number(),
+             u_id  = paste(GEOID, new_id, p_id, sep = "_"))
+  } else {
+    fips_syn_p <- NULL
+  }
   
   return(fips_syn_p)
   

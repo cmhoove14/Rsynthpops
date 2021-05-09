@@ -516,8 +516,7 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, Age) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = Age, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = Age, values_from = estimate)
       
       gq_pop_sums$Age <- gq_pop_age
     }
@@ -531,13 +530,12 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, Race) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = Race, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = Race, values_from = estimate)
       
       gq_pop_sums$Race <- gq_pop_race
     } 
     
-    if("Ethnicity" %in% chars){
+    if("Hispanic" %in% chars){
       gq_pop_eth <- gq_pop_fips %>% 
         mutate(
           # make hispanic category numeric
@@ -546,8 +544,7 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, Hispanic) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = Hispanic, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = Hispanic, values_from = estimate)
       
       gq_pop_sums$Hispanic <- gq_pop_eth
     }
@@ -564,8 +561,7 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, School_Type) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = School_Type, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = School_Type, values_from = estimate)
       
       gq_pop_sums$School_Type <- gq_pop_scltype
     }
@@ -576,8 +572,7 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, Grade) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = Grade, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = Grade, values_from = estimate)
       
       gq_pop_sums$Grade <- gq_pop_grade
     }
@@ -588,13 +583,12 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, Sex) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = Sex, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = Sex, values_from = estimate) 
       
       gq_pop_sums$Sex <- gq_pop_sex
     }
     
-    if("Occupation" %in% chars){
+    if("Occ_Group" %in% chars){
       gq_pop_occp <- gq_pop_fips %>% 
         rename("Occupation" = OCCP) %>% 
         # Merge with lookup table which relates acs and occp codes then add code 9 for unemployed/retired/in school
@@ -605,8 +599,7 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
         group_by(GEOID_use, occ_group) %>% 
         summarise(estimate = n()) %>% 
         ungroup() %>% 
-        pivot_wider(names_from = occ_group, values_from = estimate) %>% 
-        dplyr::select(-GEOID_use)
+        pivot_wider(names_from = occ_group, values_from = estimate) 
       
       gq_pop_sums$Occ_Group <- gq_pop_occp
     }
