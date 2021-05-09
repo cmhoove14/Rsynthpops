@@ -16,7 +16,7 @@
 #' @return data frame of synthesized population with all characteristics contained in `gq_seed` maintained
 #' @export
 #' 
-rsp_gq_synth <- function(fips_use, gq_seed, gq_tgt){
+rsp_synth_gq <- function(fips_use, gq_seed, gq_tgt){
   fips_puma    <- cts_to_pumas %>% 
     filter(substr(CTFP, 1, nchar(fips_use)) == fips_use) %>% 
     pull(PUMA5CE)
@@ -62,7 +62,7 @@ rsp_gq_synth <- function(fips_use, gq_seed, gq_tgt){
 #' @return data frame of synthesized population with all characteristics contained in `gq_seed` maintained
 #' @export
 #' 
-rsp_hhp_synth <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NULL){
+rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NULL){
   fips_puma    <- cts_to_pumas %>% 
     filter(substr(CTFP, 1, nchar(fips_use)) == fips_use) %>% 
     pull(PUMA5CE)
