@@ -5,12 +5,12 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 
 devtools::install_github("cmhoove14/Rsynthpops")
 
 library(Rsynthpops)
-devtools::load_all()
+#devtools::load_all()
 ```
 
 ## **Check back on May 9th for the final version of this document**   
@@ -35,7 +35,7 @@ The first decision to be made is which household and person characteristics are 
 
 ```{r inputs}
 state_use  = "CA"
-fips_use   = "06075" # Coffee county fips code
+fips_use   = "06075"
 year_use   = 2019
 survey_use = "acs5"
 pumas_use  = cts_to_pumas %>% 
@@ -45,7 +45,7 @@ pumas_use  = cts_to_pumas %>%
 ```
 
 
-```{r get_data}
+```{r get_data, cache=TRUE}
 # Variables we want to include in the final synthetic population
 characteristics <- c(
   "Sex",
@@ -120,7 +120,7 @@ gq_tgt  <- rsp_process_gq_tgt(
 gq_pop <- bind_rows(lapply(
   synth_fips,
   function(i){
-    rsp_gq_synth(i, gq_seed, gq_tgt)
+    rsp_synth_gq(i, gq_seed, gq_tgt)
   }  
 ))
 
@@ -157,12 +157,12 @@ p_tgt <- rsp_process_p_tgt(
 ```
 
 ### Synthesizing population  
-```{r synth_pop}
+```{r synth_pop, cache=TRUE}
 synth_pop <- bind_rows(lapply(
   synth_fips,
   function(i){
     cat(i, "\n")
-    rsp_hhp_synth(i, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
+    rsp_synth_hhp(i, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
   }
 ))
 ```
