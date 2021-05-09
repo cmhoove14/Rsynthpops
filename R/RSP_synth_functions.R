@@ -72,6 +72,7 @@ rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NUL
     dplyr::select(-PUMA)
   
   p_ids <- fips_p_seed$SERIALNO
+  
   fips_hh_seed <- hh_seed %>% 
     # Make sure all households have corresponding individuals in seed data  
     filter(PUMA == fips_puma & SERIALNO %in% p_ids) %>% 
@@ -81,14 +82,14 @@ rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NUL
     i %>% 
       mutate(GEOID_use = substr(GEOID, 1, nchar(fips_use))) %>% 
       filter(GEOID_use == fips_use) %>% 
-      dplyr::select(-GEOID)
+      dplyr::select(-c(GEOID, GEOID_use))
   })
   
   fips_p_tgt <- lapply(p_tgt, function(j){
     j %>% 
       mutate(GEOID_use = substr(GEOID, 1, nchar(fips_use))) %>% 
       filter(GEOID_use == fips_use) %>% 
-      dplyr::select(-GEOID)
+      dplyr::select(-c(GEOID, GEOID_use))
   })
   
   if(!is.null(gq_pop)){
@@ -116,12 +117,12 @@ rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NUL
   }
   
   
-  fips_ipu <- ipu(hh_seed, hh_tgt, p_seed, p_tgt, primary_id="SERIALNO")
+  fips_ipu <- ipu(fips_hh_seed, fips_hh_tgt, fips_p_seed, fips_p_tgt, primary_id="SERIALNO")
   fips_syn_h <- synthesize(fips_ipu$weight_tbl, primary_id="SERIALNO")
   fips_syn_p <- left_join(fips_syn_h, p_seed, by="SERIALNO") %>%
-    rename(house_id=new_id) %>% 
     mutate(GEOID = fips_use,
-           p_id  = paste0(GEOID, new_id, SPORDER))
+           p_id  = row_number(),
+           u_id  = paste(GEOID, new_id, p_id, sep = "_"))
   
   return(fips_syn_p)
   
