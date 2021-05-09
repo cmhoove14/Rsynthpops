@@ -233,7 +233,7 @@ rsp_process_p_tgt <- function(acs_p_dat, chars, fips_use, p_age_breaks = c(0,10,
       ungroup() %>% 
       pivot_wider(names_from = hispanic, values_from = estimate)
     
-    p_tgt$Ethnicity <- acs_eth_tgt
+    p_tgt$Hispanic <- acs_eth_tgt
   }
   
   # School grade ----------------
@@ -305,7 +305,7 @@ rsp_process_p_tgt <- function(acs_p_dat, chars, fips_use, p_age_breaks = c(0,10,
       ungroup() %>% 
       pivot_wider(names_from = occ_group, values_from = estimate)
     
-    p_tgt$Occupation <- acs_occup_tgt
+    p_tgt$Occ_Group <- acs_occup_tgt
   }
 
   return(p_tgt)
@@ -393,8 +393,8 @@ rsp_process_p_seed <- function(pums_dat, pumas, p_vars, p_age_breaks = c(0,10,20
       left_join(acs_occp_lookup %>% dplyr::select(Code, occ_group),
                 by = c("Occupation" = "Code")) %>% 
       mutate(occ_group = if_else(Occupation == "0009", 99, occ_group)) %>% 
-      filter(occ_group != 55) # Leave out military for now due to lack of target data
-      
+      filter(occ_group != 55) %>%  # Leave out military for now due to lack of target data
+      rename("Occ_Group" = occ_group)
     
   }
   
