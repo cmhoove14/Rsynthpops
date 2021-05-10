@@ -13,8 +13,6 @@ library(Rsynthpops)
 #devtools::load_all()
 ```
 
-## **Check back on May 9th for the final version of this document**   
-
 ## Background  
 We'll assume a working knowledge of R, particularly how to read and manipulate data. Our goal is to describe the basic functioning of the package, how to add characteristics to your population that are not already supported, and how to validate your population once it's created.    
 
@@ -158,13 +156,28 @@ p_tgt <- rsp_process_p_tgt(
 
 ### Synthesizing population  
 ```{r synth_pop, cache=TRUE}
-synth_pop <- bind_rows(lapply(
-  synth_fips,
-  function(i){
-    cat(i, "\n")
-    rsp_synth_hhp(i, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
-  }
+clust <- makeCluster(detectCores()-1)
+clusterExport(clust, c("synth_fips", 
+                       "hh_seed", "p_seed",
+                       "hh_tgt", "p_tgt",
+                       "gq_seed", "gq_tgt", "gq_pop"))
+
+clusterEvalQ(clust, library(Rsynthpops))
+
+
+synth_pop <- bind_rows(parLapply(clust, 
+                                 synth_fips, function(ct){
+                                   
+                                   rsp_synth_hhp(ct, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
+                                 }
 ))
+
+stopCluster(clust)
+
+synth_pop <- lapply(synth_fips, function(ct){
+  cat(ct, "\n")
+  rsp_synth_hhp(ct, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
+})
 ```
 
 ### Validating population  
