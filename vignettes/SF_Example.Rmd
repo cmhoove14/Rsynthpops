@@ -1,16 +1,21 @@
 ---
-title: "`Rsynthpops` Midas Tutorial"
-date: "5/10/2021"
-output: pdf_document
+title: "SF Example"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{SF_Example}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
 
-devtools::install_github("cmhoove14/Rsynthpops")
-
+```{r setup}
 library(Rsynthpops)
-#devtools::load_all()
 ```
 
 ## Background  
@@ -37,6 +42,7 @@ fips_use   = "06075"
 year_use   = 2019
 survey_use = "acs5"
 pumas_use  = cts_to_pumas %>% 
+  # If fips_use is not a 5-digit county code, update filter for state (STATEFP) or census tract (CTFP)
   filter(STCNTYFP == fips_use) %>% 
   pull(PUMA5CE) %>% 
   unique()
@@ -101,7 +107,14 @@ hh_vars <- pums_vars[which(pums_vars %in% all_pums_hh_vars)]
 p_vars <- pums_vars[which(!pums_vars %in% all_pums_hh_vars)]
 
 # Determine fips of areas to synthesize population for
-synth_fips <- unique(acs_dat[[1]]$GEOID[which(grepl(fips_use, acs_dat[[1]]$GEOID))])
+fips_pops <- acs_dat[[1]] %>% 
+  filter(variable == "B01001_001",
+         grepl(fips_use, GEOID)) %>% 
+  group_by(GEOID) %>% 
+  summarise(pop = sum(estimate)) %>% 
+  filter(pop > 0)
+
+synth_fips <- fips_pops %>% pull(GEOID)
 ```
 
 ```{r process_gqs}
@@ -173,11 +186,14 @@ synth_pop <- bind_rows(parLapply(clust,
 ))
 
 stopCluster(clust)
+```
 
+```{r synth_pop_lapply, eval = FALSE, include = FALSE}
 synth_pop <- lapply(synth_fips, function(ct){
   cat(ct, "\n")
   rsp_synth_hhp(ct, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
 })
+
 ```
 
 ### Validating population  
@@ -546,6 +562,7 @@ ggsave(here::here("Plots/PctError_Distn_Validation_rmv_high_error.png"),
        height = 4, width = 5, units = "in")
 
 ```
+
 ## Adding new characteristics  
 `tidycensus` ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Below, we see the first few variables available for the 5-year 2019 PUMS data. 
 

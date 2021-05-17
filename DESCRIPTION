@@ -28,3 +28,7 @@ LinkingTo: Rcpp, RcppEigen, RcppNumerical, RcppParallel
 Imports: 
     Rcpp
 SystemRequirements: GNU make
+Suggests: 
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
