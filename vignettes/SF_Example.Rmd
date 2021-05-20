@@ -10,33 +10,23 @@ vignette: >
 ```{r, include = FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
+  echo = FALSE,
   comment = "#>"
 )
 ```
 
-```{r setup}
-library(Rsynthpops)
-```
 
-## Background  
-We'll assume a working knowledge of R, particularly how to read and manipulate data. Our goal is to describe the basic functioning of the package, how to add characteristics to your population that are not already supported, and how to validate your population once it's created.    
-
-## Setup: PLEASE COMPLETE THESE STEPS PRIOR TO THE TUTORIAL ON MAY 10  
+## Setup  
 * Install the package and any necessary prereqs by running `devtools::install_github("cmhoove14/Rsynthpops")`  
 * If you don't have one already, get a US census api key at https://api.census.gov/data/key_signup.html. To store your api key, run `tidycensus::census_api_key(your_key, install = TRUE)` replacing `your_key` with the key you obtained from the url above.   
-* Think about a place from which you want to generate a synthetic population. It could be a county or state where you are currently conducting some modeling work, the county you grew up in, a state you find interesting, or somewhere entirely random! If you choose a state, have that state's two character state abbreviation handy. If it's a county, have the county's 5-digit Federal Information Processing Standard (FIPS) code handy. These are easy to find via a web search with the county's name and "fips code".  
+* Choose your target geography. If you choose a state or region containing multiple states, have that/those state's two character state abbreviation(s) handy. If it's a county, have the county's 5-digit Federal Information Processing Standard (FIPS) code handy. These are easy to find via a web search with the county's name and "fips code".  
 
-## Main commands  
-* `rsp_get_` commands to download raw PUMS, ACS, and census data  
-* `rsp_process_` commands to convert raw data into household/group quarters and person level seed and target data  
-* `rsp_synth_` commands to synthesize your population from your target and seed datasets  
+```{r setup}
+devtools::load_all()
+#library(Rsynthpops)
+```
 
-## Key steps  
-
-### Getting input data  
-The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` builds on functions from `tidycensus` to get PUMS and ACS data and adds an additional function to get data on group quarters directly from the census ftp site. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. 
-
-```{r inputs}
+```{r target_geo}
 state_use  = "CA"
 fips_use   = "06075"
 year_use   = 2019
@@ -48,6 +38,15 @@ pumas_use  = cts_to_pumas %>%
   unique()
 ```
 
+## Main commands  
+* `rsp_get_` commands to download raw PUMS, ACS, and census data  
+* `rsp_process_` commands to convert raw data into household/group quarters and person level seed and target data  
+* `rsp_synth_` commands to synthesize your population from your target and seed datasets  
+
+## Key steps  
+
+### Getting input data  
+The first decision to be made is which household and person characteristics are to be included in the synthetic population. `Rsynthpops` builds on functions from `tidycensus` to get PUMS and ACS data and adds an additional function to get data on group quarters directly from the census ftp site. Make sure to get and/or supply your census api key in order to use the `tidycensus` download functions. Currently supported household and person level characteristics are maintained in the `pums_to_acs` list that ships with `Rsynthpops`.  
 
 ```{r get_data, cache=TRUE}
 # Variables we want to include in the final synthetic population
@@ -117,6 +116,9 @@ fips_pops <- acs_dat[[1]] %>%
 synth_fips <- fips_pops %>% pull(GEOID)
 ```
 
+#### Generate synthetic group quarters population  
+This is a key step for most target geographies. Group quarters residents make up around 3% of the entire US population and make up a substantial proportion of the population in some census tracts, e.g. those that contain college campuses, military bases, prisons, etc. Populations can be synthesized excluding the group quarters population, but will likely overestimate the number of households in the target geography and have higher error rates among some person-level characteristics.  
+
 ```{r process_gqs}
 gq_seed <- rsp_process_gq_seed(
   pums_dat = pums_dat, 
@@ -137,6 +139,7 @@ gq_pop <- bind_rows(lapply(
 
 ```
 
+#### Process data to generate household and person seed and targets  
 ```{r process_ps_hhs}
 hh_seed <- rsp_process_hh_seed(
   pums_dat         = pums_dat, 
@@ -168,6 +171,8 @@ p_tgt <- rsp_process_p_tgt(
 ```
 
 ### Synthesizing population  
+Now that we have the group quarters population and the household and person seed and target data, we can synthesize the population. For the most accurate population, it is recommended to synthesize at the census tract level, but for large geographies (large states or groups of states with large populations) this may lead to considerable runtime.  
+
 ```{r synth_pop, cache=TRUE}
 clust <- makeCluster(detectCores()-1)
 clusterExport(clust, c("synth_fips", 
@@ -180,7 +185,6 @@ clusterEvalQ(clust, library(Rsynthpops))
 
 synth_pop <- bind_rows(parLapply(clust, 
                                  synth_fips, function(ct){
-                                   
                                    rsp_synth_hhp(ct, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
                                  }
 ))
@@ -188,7 +192,7 @@ synth_pop <- bind_rows(parLapply(clust,
 stopCluster(clust)
 ```
 
-```{r synth_pop_lapply, eval = FALSE, include = FALSE}
+```{r synth_pop_lapply, eval = FALSE, include = FALSE, echo = FALSE}
 synth_pop <- lapply(synth_fips, function(ct){
   cat(ct, "\n")
   rsp_synth_hhp(ct, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop)
@@ -202,10 +206,10 @@ synth_pop <- lapply(synth_fips, function(ct){
 ```{r global_val, echo = FALSE}
 # HHincome
 hhincome_obs <- colSums(hh_tgt$HH_Income[,-1])
-hhincome_gen <- synth_pop[!duplicated(synth_pop$house_id),] %>% group_by(hhincome) %>% summarise(n = n())
+hhincome_gen <- synth_pop[!duplicated(synth_pop$hhid),] %>% group_by(HH_Income) %>% summarise(n = n())
 
-hhincome_comp <- tibble(vrbl = "hhincome",
-                           lvl = as.factor(hhincome_gen$hhincome),
+hhincome_comp <- tibble(vrbl = "HH_Income",
+                           lvl = as.factor(hhincome_gen$HH_Income),
                            obs = hhincome_obs,
                            gen = hhincome_gen$n)
 
@@ -224,11 +228,11 @@ hhincome_comp_plot <- hhincome_comp %>%
          fill = "")
 
 # HHtype
-hhtype_obs <- colSums(hh_tgt$hhtype[,-1])
-hhtype_gen <- synth_pop[!duplicated(synth_pop$house_id),] %>% group_by(hhtype) %>% summarise(n = n())
+hhtype_obs <- colSums(hh_tgt$HH_Type[,-1])
+hhtype_gen <- synth_pop[!duplicated(synth_pop$hhid),] %>% group_by(HH_Type) %>% summarise(n = n())
 
-hhtype_comp <- tibble(vrbl = "hhtype",
-                         lvl = as.factor(hhtype_gen$hhtype),
+hhtype_comp <- tibble(vrbl = "HH_Type",
+                         lvl = as.factor(hhtype_gen$HH_Type),
                          obs = hhtype_obs,
                          gen = hhtype_gen$n)
 
@@ -248,11 +252,11 @@ hhtype_comp_plot <- hhtype_comp %>%
 
 
 # HHsize
-hhsize_obs <- colSums(hh_tgt$hhsize[,-1])
-hhsize_gen <- synth_pop[!duplicated(synth_pop$house_id),] %>% group_by(hhsize) %>% summarise(n = n())
+hhsize_obs <- colSums(hh_tgt$HH_Size[,-1])
+hhsize_gen <- synth_pop[!duplicated(synth_pop$hhid),] %>% group_by(HH_Size) %>% summarise(n = n())
 
-hhsize_comp <- tibble(vrbl = "hhsize",
-                         lvl = as.factor(hhsize_gen$hhsize),
+hhsize_comp <- tibble(vrbl = "HH_Size",
+                         lvl = as.factor(hhsize_gen$HH_Size),
                          obs = hhsize_obs,
                          gen = hhsize_gen$n)
 
@@ -272,11 +276,11 @@ hhsize_comp_plot <- hhsize_comp %>%
 
 
 # Grade
-grade_obs <- colSums(p_tgt$grade[,-1])
-grade_gen <- synth_pop %>% group_by(grade) %>% summarise(n = n())
+grade_obs <- colSums(p_tgt$Grade[,-1])
+grade_gen <- synth_pop %>% group_by(Grade) %>% summarise(n = n())
 
-grade_comp <- tibble(vrbl = "grade",
-                         lvl = as.factor(grade_gen$grade),
+grade_comp <- tibble(vrbl = "Grade",
+                         lvl = as.factor(grade_gen$Grade),
                          obs = grade_obs,
                          gen = grade_gen$n)
 
@@ -297,11 +301,11 @@ grade_comp_plot <- grade_comp %>%
 
 
 # Sex
-sex_obs <- colSums(p_tgt$sex[,-1])
-sex_gen <- synth_pop %>% group_by(sex) %>% summarise(n = n())
+sex_obs <- colSums(p_tgt$Sex[,-1])
+sex_gen <- synth_pop %>% group_by(Sex) %>% summarise(n = n())
 
-sex_comp <- tibble(vrbl = "sex",
-                      lvl = as.factor(sex_gen$sex),
+sex_comp <- tibble(vrbl = "Sex",
+                      lvl = as.factor(sex_gen$Sex),
                       obs = sex_obs,
                       gen = sex_gen$n)
 
@@ -321,11 +325,11 @@ sex_comp_plot <- sex_comp %>%
 
 
 # Occupational group
-occ_obs <- colSums(p_tgt$occ_group[,-1])
-occ_gen <- synth_pop %>% group_by(occ_group) %>% summarise(n = n())
+occ_obs <- colSums(p_tgt$Occ_Group[,-1])
+occ_gen <- synth_pop %>% group_by(Occ_Group) %>% summarise(n = n())
 
 occ_comp <- tibble(vrbl = "occ",
-                      lvl = as.factor(occ_gen$occ_group),
+                      lvl = as.factor(occ_gen$Occ_Group),
                       obs = occ_obs,
                       gen = occ_gen$n)
 
@@ -346,11 +350,11 @@ occ_comp_plot <- occ_comp %>%
 
 
 # Age Category
-age_obs <- colSums(p_tgt$age_cat[,-1])
-age_gen <- synth_pop %>% group_by(age_cat) %>% summarise(n = n())
+age_obs <- colSums(p_tgt$Age[,-1])
+age_gen <- synth_pop %>% group_by(Age) %>% summarise(n = n())
 
 age_comp <- tibble(vrbl = "age",
-                      lvl = as.factor(age_gen$age_cat),
+                      lvl = as.factor(age_gen$Age),
                       obs = age_obs,
                       gen = age_gen$n)
 
@@ -372,11 +376,11 @@ age_comp_plot <- age_comp %>%
 
 
 # Race
-race_obs <- colSums(p_tgt$race[,-1])
-race_gen <- synth_pop %>% group_by(race) %>% summarise(n = n())
+race_obs <- colSums(p_tgt$Race[,-1])
+race_gen <- synth_pop %>% group_by(Race) %>% summarise(n = n())
 
-race_comp <- tibble(vrbl = "race",
-                       lvl = as.factor(race_gen$race),
+race_comp <- tibble(vrbl = "Race",
+                       lvl = as.factor(race_gen$Race),
                        obs = race_obs,
                        gen = race_gen$n)
 
@@ -397,11 +401,11 @@ race_comp_plot <- race_comp %>%
 
 
 # Hispanic ethnicity
-eth_obs <- colSums(p_tgt$hispanic[,-1])
-eth_gen <- synth_pop %>% group_by(hispanic) %>% summarise(n = n())
+eth_obs <- colSums(p_tgt$Hispanic[,-1])
+eth_gen <- synth_pop %>% group_by(Hispanic) %>% summarise(n = n())
 
-eth_comp <- tibble(vrbl = "eth",
-                      lvl = as.factor(eth_gen$hispanic),
+eth_comp <- tibble(vrbl = "Hispanic",
+                      lvl = as.factor(eth_gen$Hispanic),
                       obs = eth_obs,
                       gen = eth_gen$n)
 
@@ -435,7 +439,7 @@ gen_obs_comp <- bind_rows(
 
 (hhincome_comp_plot | hhtype_comp_plot | hhsize_comp_plot) / (age_comp_plot | sex_comp_plot | grade_comp_plot) / (occ_comp_plot | race_comp_plot | eth_comp_plot)
 
-ggsave(here::here("Plots/Overall_Validation.png"),
+ggsave(here::here("Plots/Overall_Validation_Add_GQ.png"),
        height = 8, width = 12, units = "in")
 ```
 
@@ -458,7 +462,7 @@ val_df_tgt$pmiss <- apply(val_df_tgt, 1, FUN = function(i){
   if(vrbl %in% names(hh_tgt)){
     
     obs <- lapply(hh_tgt, function(i){
-      i %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+      i %>% filter(GEOID == ct) %>% dplyr::select(-GEOID)
     })[[vrbl]] %>% 
       pivot_longer(cols = everything(), names_to = vrbl, values_to = "n") %>% 
       group_by(!!as.name(vrbl)) %>% 
@@ -466,7 +470,7 @@ val_df_tgt$pmiss <- apply(val_df_tgt, 1, FUN = function(i){
     
     # One obs per household
     ct <- synth_pop %>% filter(GEOID == ct)
-    ct_hhs <- ct[!duplicated(ct$house_id),]
+    ct_hhs <- ct[!duplicated(ct$hhid),]
 
     gen <- ct_hhs %>% 
       group_by(!!as.name(vrbl)) %>% 
@@ -483,7 +487,7 @@ val_df_tgt$pmiss <- apply(val_df_tgt, 1, FUN = function(i){
   } else if(vrbl %in% names(p_tgt)){
     
     obs <- lapply(p_tgt, function(j){
-      j %>% filter(geo_tract == ct) %>% dplyr::select(-geo_tract)
+      j %>% filter(GEOID == ct) %>% dplyr::select(-GEOID)
     })[[vrbl]] %>% 
        pivot_longer(cols = everything(), names_to = vrbl, values_to = "n")
     
@@ -514,14 +518,14 @@ val_df_tgt %>%
   ggplot(aes(x = vrbl, y = pmiss, fill = vrbl)) +
     geom_violin() +
     scale_y_continuous(breaks = seq(0,2, by = 0.1)) +
-    scale_x_discrete(labels = c("hhincome" = "HH\nIncome",
-                                "hhtype"   = "HH\nType",
-                                "hhsize"   = "HH\nSize",
-                                "grade"    = "Grade",
-                                "sex"      = "Sex",
-                                "occ_group"= "Occp\nGroup",
-                                "age_cat"  = "Age\nCat",
-                                "race"     = "Race",
+    scale_x_discrete(labels = c("HH_Income" = "HH\nIncome",
+                                "HH_Type"   = "HH\nType",
+                                "HH_Size"   = "HH\nSize",
+                                "Grade"    = "Grade",
+                                "Sex"      = "Sex",
+                                "Occ_Group"= "Occp\nGroup",
+                                "Age"  = "Age\nCat",
+                                "Race"     = "Race",
                                 "Hispanic" = "Hispanic")) +
     theme_classic() +
     theme(legend.position = "none") +
@@ -542,14 +546,14 @@ val_df_tgt %>%
   ggplot(aes(x = vrbl, y = pmiss, fill = vrbl)) +
     geom_violin() +
     scale_y_continuous(breaks = seq(0,2, by = 0.1)) +
-    scale_x_discrete(labels = c("hhincome" = "HH\nIncome",
-                                "hhtype"   = "HH\nType",
-                                "hhsize"   = "HH\nSize",
-                                "grade"    = "Grade",
-                                "sex"      = "Sex",
-                                "occ_group"= "Occp\nGroup",
-                                "age_cat"  = "Age\nCat",
-                                "race"     = "Race",
+    scale_x_discrete(labels = c("HH_Income" = "HH\nIncome",
+                                "HH_Type"   = "HH\nType",
+                                "HH_Size"   = "HH\nSize",
+                                "Grade"    = "Grade",
+                                "Sex"      = "Sex",
+                                "Occ_Group"= "Occp\nGroup",
+                                "Age"  = "Age\nCat",
+                                "Race"     = "Race",
                                 "Hispanic" = "Hispanic")) +
     theme_classic() +
     theme(legend.position = "none") +
@@ -562,33 +566,3 @@ ggsave(here::here("Plots/PctError_Distn_Validation_rmv_high_error.png"),
        height = 4, width = 5, units = "in")
 
 ```
-
-## Adding new characteristics  
-`tidycensus` ships with a dataset `pums_variables` where users can inspect potential variables to include in the PUMS download. Below, we see the first few variables available for the 5-year 2019 PUMS data. 
-
-```{r pums_vars_head}
-pums_vars_all <- pums_variables %>% 
-  filter(year == 2018, survey == "acs5")
-
-pums_vars <- pums_vars_all %>% 
-  distinct(var_code, var_label, data_type, level)
-
-  head(pums_vars, n = 10)
-```
-
-`tidycensus` also has a function `load_variables()` to view aggregate variables reported in the acs.
-
-```{r acs_vars}
-acs_vars<-tidycensus::load_variables(2019, "acs5", cache=FALSE)
-head(acs_vars)
-
-acs_vars_subject<-load_variables(year_use, paste0(survey_use, "/subject"), cache=FALSE)
-acs_vars_profile<-load_variables(year_use, paste0(survey_use, "/profile"), cache=FALSE)
-
-```
-
-* Inspect ACS and PUMS variables for data pertaining to your desire characteristics  
-* Determine how to match ACS and PUMS variables  
-* Process into target and seed characteristics  
-* Synthesize with new characteristic  
-* Validate  
