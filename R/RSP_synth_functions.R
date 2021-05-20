@@ -134,12 +134,20 @@ rsp_synth_hhp <- function(fips_use, hh_seed, p_seed, hh_tgt, p_tgt, gq_pop = NUL
     fips_syn_h <- synthesize(fips_ipu$weight_tbl, primary_id="SERIALNO")
     fips_syn_p <- left_join(fips_syn_h, p_seed, by="SERIALNO") %>%
       mutate(GEOID = fips_use,
-             p_id  = row_number(),
-             u_id  = paste(GEOID, new_id, p_id, sep = "_"))
+             hhid  = paste(GEOID, new_id, sep = "_"),
+             p_id  = paste(hhid, row_number(), sep = "_")) %>% 
+      dplyr::select(all_of(c("GEOID", "hhid", "p_id", names(hh_tgt), names(p_tgt))))
+    
+    if(!is.null(gq_pop)){
+      fips_syn_gq <- rsp_clean_gq_pop(gq_pop, c(names(hh_tgt), names(p_tgt)), fips_use)
+      
+      fips_syn_pop <- rbind(fips_syn_p, fips_syn_gq)
+    }
+    
   } else {
-    fips_syn_p <- NULL
+    fips_syn_pop <- NULL
   }
   
-  return(fips_syn_p)
+  return(fips_syn_pop)
   
 }
