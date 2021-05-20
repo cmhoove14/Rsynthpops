@@ -611,3 +611,102 @@ rsp_process_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20
   return(gq_pop_sums)
   
 }
+
+
+#' @title Clean group quarters synthetic population to match characteristics in synth pop
+#' 
+#' @description Used to clean column names and discretized variables to match synthetic population  
+#' 
+#' @param gq_pop Synthesized group quarters population, e.g. from `rsp_gq_synth()`
+#' @param chars person-level characteristics to be synthesized. Will be used to aggregate and summarize data in `gq_pop`
+#' @param fips_use fips code corresponding to target area to synthesize group quarters population
+#' @param p_age_breaks vector of breaks at which to divide age categories, defaults to deciles
+#' 
+#' @details 
+#' 
+#' @return list with names as in chars with marginal totals of each characteristic represented in gq population. 
+#' @export
+#' 
+rsp_clean_gq_pop <- function(gq_pop, chars, fips_use, p_age_breaks = c(0,10,20,30,40,50,60,70,80,150)){
+  
+  gq_pop_sums <- list()
+  
+  gq_pop_fips <- gq_pop %>% 
+    mutate(GEOID_use = substr(GEOID, 1, nchar(fips_use))) %>% 
+    filter(GEOID_use == fips_use)
+  
+  if(nrow(gq_pop_fips) > 0){
+    if("Age" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        mutate(
+          # Condense age into categories
+          Age = as.factor(cut(AGEP, breaks = p_age_breaks, 
+                              labels = FALSE, right = FALSE, include.lowest = TRUE))
+        ) %>% 
+        dplyr::select(-c(AGEP, GQ_Age))
+    }
+    
+    if("Race" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        mutate(
+          # Condense American Indian and Alaska Native categories to match acs reporting of aggregate totals
+          Race = if_else(RAC1P %in% c("3", "4", "5"), "3", RAC1P)
+        )%>% 
+        dplyr::select(-RAC1P)
+    } 
+    
+    if("Ethnicity" %in% chars | "Hispanic" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        mutate(
+          # make hispanic category numeric
+          Hispanic = if_else(HISP == "01", 0, 1)
+        )%>% 
+        dplyr::select(-HISP)
+    }
+    
+    if("School_Type" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        mutate(
+          # More informative school type codes
+          School_Type = case_when(SCH == "b" ~ "non",
+                                  SCH == "1" ~ "non",
+                                  SCH == "2" ~ "pub",
+                                  SCH == "3" ~ "pvt")
+        )%>% 
+        dplyr::select(-SCH)
+    }
+    
+    if("Grade" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        rename("Grade" = SCHG)
+    }
+    
+    if("Sex" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        rename("Sex" = GQ_Sex) 
+    }
+    
+    if("Occ_Group" %in% chars){
+      gq_pop_fips <- gq_pop_fips %>% 
+        rename("Occupation" = OCCP) %>% 
+        # Merge with lookup table which relates acs and occp codes then add code 9 for unemployed/retired/in school
+        left_join(acs_occp_lookup %>% dplyr::select(Code, occ_group),
+                  by = c("Occupation" = "Code")) %>% 
+        mutate(Occ_Group = if_else(Occupation == "0009", 99, occ_group)) %>% 
+        filter(occ_group != 55)
+    }
+    
+    gq_pop_fips <- gq_pop_fips %>% 
+      mutate(hhid      = paste(GEOID, "GQ", GQ_Type, new_id, sep = "_"),
+             HH_Income = 0,
+             HH_Type   = paste("GQ", GQ_Type, sep = "_"),
+             HH_Size   = NA_real_) %>% 
+      dplyr::select(all_of(c("GEOID", "hhid", "p_id", chars))) 
+    
+  } else {
+    gq_pop_fips <- NULL
+  }
+  
+  return(gq_pop_fips)
+  
+}
